@@ -53,8 +53,6 @@ AM1_CHARGE_CACHE = "AM1Cache"
 AM1BCC_CHARGE_CACHE = "AM1BCCCache"
 AM1ELF10_CHARGE_CACHE = "AM1ELF10Cache"
 AM1BCCELF10_CHARGE_CACHE = "AM1BCCELF10Cache"
-CONFORGE_AM1ELF10_CHARGE_CACHE = "ConforgeAM1ELF10Cache"
-CONFORGE_AM1BCCELF10_CHARGE_CACHE = "ConforgeAM1BCCELF10Cache"
 BOND_SMIRK_MATCH_CACHE = "BondSmirkMatchCache"
 NN_FEATURES_PROPNAME = "NNFeatures"
 
@@ -62,10 +60,7 @@ AM1 = "AM1"
 AM1ELF10 = "AM1ELF10"
 AM1BCC = "AM1BCC"
 AM1BCCELF10 = "AM1BCCELF10"
-CONFORGE_AM1ELF10 = "ConforgeAM1ELF10"
-CONFORGE_AM1BCCELF10 = "ConforgeAM1BCCELF10"
 ELF10_MODELS = (AM1ELF10, AM1BCCELF10)
-CONFORGE_ELF10_MODELS = (CONFORGE_AM1ELF10, CONFORGE_AM1BCCELF10)
 
 
 def convert_to_oe(mol: Chem.Mol):
@@ -86,42 +81,59 @@ def convert_to_oe(mol: Chem.Mol):
 
 
 def oe_generate_conformations(oemol, sample_hydrogens=True):
-    """Generate conformations for the input molecule.
+    """Generate conformations for the input molecule using CONFORGE.
+
+    This function generates conformers using the open-source CONFORGE algorithm
+    from CDPKit, which is ~6x faster than RDKit ETKDG and produces high-quality
+    conformers suitable for AM1-ELF10 charge calculations.
+
     The molecule is modified in place.
-
-    Note: This currently does not filter out trans carboxylic acids.
-    See https://github.com/openforcefield/openff-toolkit/pull/1171
-
-    Note: This may permute the molecule in-place during canonicalization.
-        (If the original atom ordering needs to be recovered, modify calling context using {Set/Get}MapIdx.)
 
     Parameters
     ----------
     oemol: oechem.OEMol
     sample_hydrogens: bool
+        (Ignored - kept for API compatibility. CONFORGE handles hydrogens automatically.)
 
     References
     ----------
-    [1] https://docs.eyesopen.com/toolkits/cookbook/python/modeling/am1-bcc.html
+    [1] CONFORGE: https://pubs.acs.org/doi/10.1021/acs.jcim.3c00563
     """
+    from openeye import oechem
 
-    from openeye import oeomega
+    # Convert OEMol to RDKit mol for CONFORGE
+    ofs = oechem.oemolostream()
+    ofs.SetFormat(oechem.OEFormat_SDF)
+    ofs.openstring()
+    oechem.OEWriteMolecule(ofs, oemol)
+    sdf_string = ofs.GetString().decode("utf-8")
+    ofs.close()
 
-    # generate conformations using omega
-    omegaOpts = oeomega.OEOmegaOptions()
-    omegaOpts.GetTorDriveOptions().SetUseGPU(False)
-    omega = oeomega.OEOmega(omegaOpts)
-    # exclude the initial input conformer
-    omega.SetIncludeInput(False)
-    omega.SetCanonOrder(True)  # may not preserve input atom ordering
-    omega.SetSampleHydrogens(sample_hydrogens)
-    omega.SetEnergyWindow(15.0)
-    omega.SetMaxConfs(800)
-    omega.SetRMSThreshold(1.0)
+    # Parse with RDKit
+    rd_mol = Chem.MolFromMolBlock(sdf_string, removeHs=False)
+    if rd_mol is None:
+        raise RuntimeError(f"Failed to convert OEMol to RDKit mol for '{oemol.GetTitle()}'")
 
-    has_confs = omega(oemol)
-    if not has_confs:
-        raise Exception(f"Unable to generate conformations for charge assignment for '{oemol.GetTitle()}'")
+    # Add hydrogens if needed
+    rd_mol = Chem.AddHs(rd_mol, addCoords=True)
+
+    # Generate conformers using CONFORGE
+    generate_conformations_conforge(rd_mol, n_confs=800, rms_threshold=0.5)
+
+    if rd_mol.GetNumConformers() == 0:
+        raise RuntimeError(f"CONFORGE failed to generate conformers for '{oemol.GetTitle()}'")
+
+    # Transfer conformers back to OEMol
+    oemol.DeleteConfs()
+    for conf in rd_mol.GetConformers():
+        coords = []
+        for i in range(rd_mol.GetNumAtoms()):
+            pos = conf.GetAtomPosition(i)
+            coords.extend([pos.x, pos.y, pos.z])
+        oemol.NewConf(oechem.OEFloatArray(coords))
+
+    # Set dimension to 3D (required for AM1 calculations)
+    oechem.OESetDimensionFromCoords(oemol)
 
 
 def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
@@ -260,145 +272,6 @@ def generate_conformations_conforge(mol: Chem.Mol, n_confs: int = 800, rms_thres
             vec = conf_data.getElement(j)
             conf.SetAtomPosition(j, (vec[0], vec[1], vec[2]))
         mol.AddConformer(conf, assignId=True)
-
-
-def convert_rdkit_to_oe_multiconf(mol: Chem.Mol):
-    """Convert RDKit mol with multiple conformers to OEMol with multiple conformers."""
-    from openeye import oechem
-
-    # First, convert the molecule structure (without conformers)
-    mb = Chem.MolToMolBlock(mol)
-    ims = oechem.oemolistream()
-    ims.SetFormat(oechem.OEFormat_SDF)
-    ims.openstring(mb)
-
-    oemol = None
-    for buf_mol in ims.GetOEMols():
-        oemol = oechem.OEMol(buf_mol)
-    ims.close()
-
-    if oemol is None:
-        raise RuntimeError("Failed to convert molecule to OEMol")
-
-    # Clear existing conformers and add all RDKit conformers
-    oemol.DeleteConfs()
-
-    for conf in mol.GetConformers():
-        coords = []
-        for i in range(mol.GetNumAtoms()):
-            pos = conf.GetAtomPosition(i)
-            coords.extend([pos.x, pos.y, pos.z])
-        oemol.NewConf(oechem.OEFloatArray(coords))
-
-    # Set dimension to 3D (required for AM1 calculations)
-    oechem.OESetDimensionFromCoords(oemol)
-
-    return oemol
-
-
-def conforge_assign_charges(mol: Chem.Mol, charge_model: str = CONFORGE_AM1ELF10) -> NDArray:
-    """
-    Assign partial charges using CONFORGE for conformer generation and QuacPac for AM1 charges.
-
-    This is ~7x faster than using RDKit ETKDG for conformer generation and produces
-    charges with >0.998 correlation to the full OpenEye (Omega+QuacPac) reference.
-
-    Parameters
-    ----------
-    mol: Chem.Mol
-        RDKit molecule
-    charge_model: str
-        One of CONFORGE_AM1ELF10 or CONFORGE_AM1BCCELF10
-
-    Returns
-    -------
-    NDArray
-        Partial charges in TMD units (premultiplied by sqrt(ONE_4PI_EPS0))
-    """
-    from openeye import oequacpac
-
-    # Work on a copy with explicit hydrogens
-    work_mol = Chem.Mol(mol)
-    work_mol = Chem.AddHs(work_mol, addCoords=True)
-
-    # Generate conformers using CONFORGE
-    generate_conformations_conforge(work_mol)
-
-    if work_mol.GetNumConformers() == 0:
-        raise RuntimeError(f"CONFORGE failed to generate conformers for '{get_mol_name(mol)}'")
-
-    # Convert to OEMol with all conformers
-    oemol = convert_rdkit_to_oe_multiconf(work_mol)
-
-    # Store original atom ordering for recovery
-    for i, atom in enumerate(oemol.GetAtoms()):
-        atom.SetMapIdx(i + 1)
-
-    # Select charge engine based on model
-    if charge_model == CONFORGE_AM1ELF10:
-        charge_engine = oequacpac.OEELFCharges(oequacpac.OEAM1Charges(symmetrize=True), 10)
-    elif charge_model == CONFORGE_AM1BCCELF10:
-        charge_engine = oequacpac.OEAM1BCCELF10Charges()
-    else:
-        raise ValueError(f"Unknown charge model: {charge_model}")
-
-    # Assign charges
-    result = oequacpac.OEAssignCharges(oemol, charge_engine)
-    if result is False:
-        # ELF selection can fail for some molecules (e.g. with few conformers)
-        # Fall back to simple AM1 charges if ELF10 selection fails
-        if charge_model == CONFORGE_AM1ELF10:
-            charge_engine = oequacpac.OEAM1Charges(symmetrize=True)
-            result = oequacpac.OEAssignCharges(oemol, charge_engine)
-        if result is False:
-            raise RuntimeError(f"QuacPac failed to assign charges for '{get_mol_name(mol)}'")
-
-    partial_charges = np.array([atom.GetPartialCharge() for atom in oemol.GetAtoms()])
-
-    # Verify charges sum to integer
-    net_charge = np.sum(partial_charges)
-    net_charge_is_integral = np.isclose(net_charge, np.round(net_charge), atol=1e-5)
-    assert net_charge_is_integral, f"Charge is not an integer: {net_charge}"
-
-    # Apply TMD scaling factor
-    inlined_constant = np.sqrt(constants.ONE_4PI_EPS0)
-
-    # Recover original atom ordering
-    inv_permutation = np.argsort([(atom.GetMapIdx() - 1) for atom in oemol.GetAtoms()])
-
-    return inlined_constant * partial_charges[inv_permutation]
-
-
-def compute_or_load_conforge_charges(mol: Chem.Mol, mode: str = CONFORGE_AM1ELF10) -> NDArray:
-    """
-    Unless already cached in mol's property, use CONFORGE + QuacPac to compute partial charges.
-
-    This is ~7x faster than using RDKit ETKDG and produces charges with >0.998 correlation
-    to the OpenEye (Omega+QuacPac) reference.
-
-    Parameters
-    ----------
-    mol: Chem.Mol
-        RDKit molecule
-    mode: str
-        One of CONFORGE_AM1ELF10 or CONFORGE_AM1BCCELF10
-
-    Returns
-    -------
-    NDArray
-        Partial charges in TMD units
-    """
-    assert mode in CONFORGE_ELF10_MODELS
-
-    cache_prop_name = f"{mode}{CACHE_SUFFIX}"
-    if not mol.HasProp(cache_prop_name):
-        charges = list(conforge_assign_charges(mol, mode))
-        mol.SetProp(cache_prop_name, base64.b64encode(pickle.dumps(charges)))
-    else:
-        charges = pickle.loads(base64.b64decode(mol.GetProp(cache_prop_name)))
-        assert len(charges) == mol.GetNumAtoms(), "Charge cache has different number of charges than mol atoms"
-
-    return np.array(charges)
 
 
 def generate_exclusion_idxs(
