@@ -157,6 +157,16 @@ def replace_clashy_waters(
 
     clashy_waters = get_waters_to_delete()
     combined_templates = get_ion_residue_templates(modeller)
+
+    # Ensure the forcefield has a template for the dummy CL residues we added.
+    # Some water forcefields (e.g., opc3) don't include ion templates.
+    if CHLORINE_ION_RESIDUE not in host_ff._templates:
+        # Register a minimal CL template - the actual parameters don't matter since
+        # the dummy atoms are deleted after water placement
+        cl_template = app.ForceField._TemplateData(CHLORINE_ION_RESIDUE)
+        cl_template.addAtom(app.ForceField._TemplateAtomData(CHLORINE_ION_RESIDUE, "Cl", app.Element.getBySymbol("Cl")))
+        host_ff.registerResidueTemplate(cl_template)
+
     # First add back in the number of waters that are clashy and we know we need to delete
     modeller.addSolvent(
         host_ff,
