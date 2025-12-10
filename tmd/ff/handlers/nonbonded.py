@@ -80,12 +80,71 @@ def convert_to_oe(mol: Chem.Mol):
     return oemol
 
 
-def oe_generate_conformations(oemol, sample_hydrogens=True):
-    """Generate conformations for the input molecule using CONFORGE.
+def _make_carboxylic_acids_cis(rd_mol):
+    """Rotate trans carboxylic acid groups to cis configuration.
 
-    This function generates conformers using the open-source CONFORGE algorithm
-    from CDPKit, which is ~6x faster than RDKit ETKDG and produces high-quality
-    conformers suitable for AM1-ELF10 charge calculations.
+    Some conformer generators produce conformers with trans carboxylic acid
+    (COOH) groups, which causes OpenEye's ELF algorithm to fail with "diverse
+    selection of confs failed". This function rotates any trans COOH groups to cis.
+
+    The cis configuration is also more physically relevant since trans COOH
+    has an internal hydrogen bond that makes it energetically unfavorable.
+
+    Parameters
+    ----------
+    rd_mol : RDKit Mol
+        Molecule with conformers to modify in place.
+
+    References
+    ----------
+    [1] OpenFF Toolkit issue #346: https://github.com/openforcefield/openff-toolkit/issues/346
+    [2] OpenEye ELF bug with trans COOH: https://github.com/openforcefield/openff-toolkit/pull/831
+    """
+    from rdkit.Chem import rdMolTransforms
+
+    # SMARTS for carboxylic acid: O=C-O-H
+    carboxylic_acid_smarts = Chem.MolFromSmarts("[OX1]=[CX3]-[OX2H1]")
+    matches = rd_mol.GetSubstructMatches(carboxylic_acid_smarts)
+
+    if not matches:
+        return
+
+    for match in matches:
+        o_double, c, o_h = match
+
+        # Find the hydrogen bonded to O-H
+        oh_atom = rd_mol.GetAtomWithIdx(o_h)
+        h_idx = None
+        for neighbor in oh_atom.GetNeighbors():
+            if neighbor.GetSymbol() == "H":
+                h_idx = neighbor.GetIdx()
+                break
+
+        if h_idx is None:
+            continue  # No explicit hydrogen found
+
+        # For each conformer, check if trans and rotate to cis
+        for conf in rd_mol.GetConformers():
+            # Get O=C-O-H dihedral: cis ~ 0°, trans ~ 180°
+            dihedral = rdMolTransforms.GetDihedralDeg(conf, o_double, c, o_h, h_idx)
+
+            # If trans (|dihedral| > 90°), rotate to cis (0°)
+            if abs(dihedral) > 90:
+                rdMolTransforms.SetDihedralDeg(conf, o_double, c, o_h, h_idx, 0.0)
+
+
+def oe_generate_conformations(oemol, sample_hydrogens=True):
+    """Generate conformations for the input molecule using RDKit ETKDGv3.
+
+    This function generates conformers using RDKit's ETKDGv3 algorithm with
+    MMFF94s minimization, which produces high-quality conformers suitable for
+    AM1-ELF10 charge calculations without requiring OpenEye Omega.
+
+    The original input conformer is preserved and included with the ETKDGv3
+    conformers, which is required for compatibility with OpenEye's ELF algorithm.
+
+    Any carboxylic acid groups are rotated to cis configuration to work around
+    a known bug in OpenEye's ELF algorithm that fails on trans COOH conformers.
 
     The molecule is modified in place.
 
@@ -93,15 +152,15 @@ def oe_generate_conformations(oemol, sample_hydrogens=True):
     ----------
     oemol: oechem.OEMol
     sample_hydrogens: bool
-        (Ignored - kept for API compatibility. CONFORGE handles hydrogens automatically.)
+        (Ignored - kept for API compatibility.)
 
     References
     ----------
-    [1] CONFORGE: https://pubs.acs.org/doi/10.1021/acs.jcim.3c00563
+    [1] ELF trans-COOH bug: https://github.com/openforcefield/openff-toolkit/issues/346
     """
     from openeye import oechem
 
-    # Convert OEMol to RDKit mol for CONFORGE
+    # Convert OEMol to RDKit mol for ETKDGv3
     ofs = oechem.oemolostream()
     ofs.SetFormat(oechem.OEFormat_SDF)
     ofs.openstring()
@@ -109,7 +168,7 @@ def oe_generate_conformations(oemol, sample_hydrogens=True):
     sdf_string = ofs.GetString().decode("utf-8")
     ofs.close()
 
-    # Parse with RDKit
+    # Parse with RDKit - this preserves the original input conformer
     rd_mol = Chem.MolFromMolBlock(sdf_string, removeHs=False)
     if rd_mol is None:
         raise RuntimeError(f"Failed to convert OEMol to RDKit mol for '{oemol.GetTitle()}'")
@@ -117,13 +176,18 @@ def oe_generate_conformations(oemol, sample_hydrogens=True):
     # Add hydrogens if needed
     rd_mol = Chem.AddHs(rd_mol, addCoords=True)
 
-    # Generate conformers using CONFORGE
-    generate_conformations_conforge(rd_mol, n_confs=800, rms_threshold=0.5)
+    # Generate additional conformers using RDKit ETKDGv3
+    rd_mol_etkdg = Chem.AddHs(Chem.MolFromMolBlock(sdf_string, removeHs=False), addCoords=True)
+    generate_conformations_etkdg(rd_mol_etkdg)  # Uses default: n_confs=3000, rms_threshold=0.05
+
+    # Add ETKDGv3 conformers to the original
+    for conf in rd_mol_etkdg.GetConformers():
+        rd_mol.AddConformer(conf, assignId=True)
 
     if rd_mol.GetNumConformers() == 0:
-        raise RuntimeError(f"CONFORGE failed to generate conformers for '{oemol.GetTitle()}'")
+        raise RuntimeError(f"ETKDGv3 failed to generate conformers for '{oemol.GetTitle()}'")
 
-    # Transfer conformers back to OEMol
+    # Transfer all conformers back to OEMol (original + ETKDGv3)
     oemol.DeleteConfs()
     for conf in rd_mol.GetConformers():
         coords = []
@@ -191,33 +255,27 @@ def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
     return inlined_constant * partial_charges[inv_permutation]
 
 
-def generate_conformations_conforge(mol: Chem.Mol, n_confs: int = 800, rms_threshold: float = 0.5):
+def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 3000, rms_threshold: float = 0.05):
     """
-    Generate conformations using CONFORGE from CDPKit.
+    Generate conformations using RDKit ETKDGv3 with MMFF94s minimization.
 
-    CONFORGE is a state-of-the-art open-source conformer generator that is
-    significantly faster than RDKit ETKDG (~6x faster) while producing high-quality
-    conformers suitable for AM1-ELF10 charge calculations.
-
-    Reference: https://pubs.acs.org/doi/10.1021/acs.jcim.3c00563
-    GitHub: https://github.com/molinfo-vienna/CDPKit
+    This uses multiple random seeds for better conformational diversity,
+    combined with MMFF94s force field minimization (similar to Omega).
 
     Parameters
     ----------
     mol: Chem.Mol
         RDKit molecule (modified in place)
     n_confs: int
-        Maximum number of conformers to generate (default 800)
+        Maximum number of conformers to generate (default 3000)
     rms_threshold: float
-        RMSD threshold for conformer pruning (default 0.5 Angstrom)
+        RMSD threshold for conformer pruning (default 0.05 Angstrom)
 
     Returns
     -------
     None (molecule is modified in place)
     """
-    import CDPL.Base as CDPLBase
-    import CDPL.Chem as CDPLChem
-    import CDPL.ConfGen as ConfGen
+    from rdkit.Chem import AllChem
 
     # Store original conformer if available
     try:
@@ -227,51 +285,33 @@ def generate_conformations_conforge(mol: Chem.Mol, n_confs: int = 800, rms_thres
 
     mol.RemoveAllConformers()
 
-    # Convert RDKit mol to CDPL mol via in-memory SDF string (no temp files)
-    mol_block = Chem.MolToMolBlock(mol) + "\n$$$$\n"
-    stream = CDPLBase.StringIOStream(mol_block, "r")
-    reader = CDPLChem.SDFMoleculeReader(stream)
+    # Generate ETKDGv3 conformers with multiple random seeds for diversity
+    confs_per_seed = n_confs // 4
+    for seed in [42, 1234, 5678, 9999]:
+        mol_copy = Chem.Mol(mol)
+        params = AllChem.ETKDGv3()
+        params.randomSeed = seed
+        params.numThreads = 0
+        params.pruneRmsThresh = rms_threshold
+        AllChem.EmbedMultipleConfs(mol_copy, numConfs=confs_per_seed, params=params)
 
-    cdpl_mol = CDPLChem.BasicMolecule()
-    if not reader.read(cdpl_mol):
-        raise RuntimeError("Failed to read molecule into CDPL")
+        # Minimize with MMFF94s (like Omega does)
+        try:
+            AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant='MMFF94s', maxIters=200, numThreads=0)
+        except Exception:
+            pass
 
-    # Prepare molecule for CONFORGE
-    CDPLChem.perceiveComponents(cdpl_mol, False)
-    CDPLChem.perceiveSSSR(cdpl_mol, False)
-    CDPLChem.setRingFlags(cdpl_mol, False)
-    CDPLChem.calcImplicitHydrogenCounts(cdpl_mol, False)
-    CDPLChem.perceiveHybridizationStates(cdpl_mol, False)
-    CDPLChem.setAromaticityFlags(cdpl_mol, False)
-    CDPLChem.calcCIPPriorities(cdpl_mol, False)
-    CDPLChem.calcAtomCIPConfigurations(cdpl_mol, False)
-    CDPLChem.calcBondCIPConfigurations(cdpl_mol, False)
+        for conf in mol_copy.GetConformers():
+            mol.AddConformer(conf, assignId=True)
 
-    # Configure conformer generator
-    conf_gen = ConfGen.ConformerGenerator()
-    conf_gen_settings = conf_gen.getSettings()
-    conf_gen_settings.setMaxNumOutputConformers(n_confs)
-    conf_gen_settings.setMinRMSD(rms_threshold)
+    # Fix carboxylic acids to cis configuration (required for OE ELF compatibility)
+    _make_carboxylic_acids_cis(mol)
 
-    # Generate conformers
-    conf_gen.generate(cdpl_mol)
-    num_confs = conf_gen.getNumConformers()
-
-    if num_confs == 0:
+    if mol.GetNumConformers() == 0:
         if original_conf is not None:
             mol.AddConformer(original_conf)
         else:
-            raise RuntimeError("CONFORGE failed to generate any conformers")
-        return
-
-    # Convert conformers back to RDKit
-    for i in range(num_confs):
-        conf_data = conf_gen.getConformer(i)
-        conf = Chem.Conformer(mol.GetNumAtoms())
-        for j in range(mol.GetNumAtoms()):
-            vec = conf_data.getElement(j)
-            conf.SetAtomPosition(j, (vec[0], vec[1], vec[2]))
-        mol.AddConformer(conf, assignId=True)
+            raise RuntimeError("ETKDGv3 failed to generate any conformers")
 
 
 def generate_exclusion_idxs(
