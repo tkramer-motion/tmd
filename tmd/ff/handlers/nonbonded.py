@@ -410,6 +410,7 @@ def compute_or_load_oe_charges(mol, mode=AM1ELF10):
     # check for cache
     cache_prop_name = f"{mode}{CACHE_SUFFIX}"
     if not mol.HasProp(cache_prop_name):
+        print("Computing charges")
         # The charges returned by OEQuacPac is not deterministic across OS platforms. It is known
         # to be an issue that the atom ordering modifies the return values as well. A follow up
         # with OpenEye is in order
@@ -421,7 +422,6 @@ def compute_or_load_oe_charges(mol, mode=AM1ELF10):
     else:
         oe_charges = pickle.loads(base64.b64decode(mol.GetProp(cache_prop_name)))
         assert len(oe_charges) == mol.GetNumAtoms(), "Charge cache has different number of charges than mol atoms"
-        print("Using cached charges")
 
     return np.array(oe_charges)
 
