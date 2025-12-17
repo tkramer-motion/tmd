@@ -421,6 +421,7 @@ def compute_or_load_oe_charges(mol, mode=AM1ELF10):
     else:
         oe_charges = pickle.loads(base64.b64decode(mol.GetProp(cache_prop_name)))
         assert len(oe_charges) == mol.GetNumAtoms(), "Charge cache has different number of charges than mol atoms"
+        print("Using cached charges")
 
     return np.array(oe_charges)
 
