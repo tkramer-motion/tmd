@@ -178,7 +178,7 @@ def oe_generate_conformations(oemol, sample_hydrogens=True):
 
     # Generate additional conformers using RDKit ETKDGv3
     rd_mol_etkdg = Chem.AddHs(Chem.MolFromMolBlock(sdf_string, removeHs=False), addCoords=True)
-    generate_conformations_etkdg(rd_mol_etkdg)  # Uses default: n_confs=3000, rms_threshold=0.05
+    generate_conformations_etkdg(rd_mol_etkdg)  # Uses default: n_confs=800, rms_threshold=0.5
 
     # Add ETKDGv3 conformers to the original
     for conf in rd_mol_etkdg.GetConformers():
@@ -255,7 +255,7 @@ def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
     return inlined_constant * partial_charges[inv_permutation]
 
 
-def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 3000, rms_threshold: float = 0.05):
+def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshold: float = 0.5):
     """
     Generate conformations using RDKit ETKDGv3 with MMFF94s minimization.
 
@@ -267,9 +267,9 @@ def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 3000, rms_thresho
     mol: Chem.Mol
         RDKit molecule (modified in place)
     n_confs: int
-        Maximum number of conformers to generate (default 3000)
+        Maximum number of conformers to generate (default 800)
     rms_threshold: float
-        RMSD threshold for conformer pruning (default 0.05 Angstrom)
+        RMSD threshold for conformer pruning (default 0.5 Angstrom)
 
     Returns
     -------
@@ -410,7 +410,6 @@ def compute_or_load_oe_charges(mol, mode=AM1ELF10):
     # check for cache
     cache_prop_name = f"{mode}{CACHE_SUFFIX}"
     if not mol.HasProp(cache_prop_name):
-        print("Computing charges")
         # The charges returned by OEQuacPac is not deterministic across OS platforms. It is known
         # to be an issue that the atom ordering modifies the return values as well. A follow up
         # with OpenEye is in order
