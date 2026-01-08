@@ -297,7 +297,7 @@ def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshol
 
         # Minimize with MMFF94s (like Omega does)
         try:
-            AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant='MMFF94s', maxIters=200, numThreads=0)
+            AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant="MMFF94s", maxIters=20, numThreads=0)
         except Exception:
             pass
 
