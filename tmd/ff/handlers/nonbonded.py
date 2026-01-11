@@ -255,7 +255,7 @@ def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
     return inlined_constant * partial_charges[inv_permutation]
 
 
-def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshold: float = 0.5):
+def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshold: float = 1.0, max_iters: int = 100):
     """
     Generate conformations using RDKit ETKDGv3 with MMFF94s minimization.
 
@@ -297,7 +297,7 @@ def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshol
 
         # Minimize with MMFF94s (like Omega does)
         try:
-            AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant="MMFF94s", maxIters=20, numThreads=0)
+            AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant="MMFF94s", maxIters=max_iters, numThreads=0)
         except Exception:
             pass
 
