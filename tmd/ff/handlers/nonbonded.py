@@ -255,7 +255,7 @@ def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
     return inlined_constant * partial_charges[inv_permutation]
 
 
-def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 1600, rms_threshold: float = 1.0, max_iters: int = 100):
+def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshold: float = 1.0, max_iters: int = 100):
     """
     Generate conformations using RDKit ETKDGv3 with MMFF94s minimization.
 
@@ -286,12 +286,14 @@ def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 1600, rms_thresho
     mol.RemoveAllConformers()
 
     # Generate ETKDGv3 conformers with multiple random seeds for diversity
-    mol_copy = Chem.Mol(mol)
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 472
-    params.numThreads = 0
-    params.pruneRmsThresh = rms_threshold
-    AllChem.EmbedMultipleConfs(mol_copy, numConfs=n_confs, params=params)
+    confs_per_seed = n_confs // 4
+    for seed in [42, 1234, 5678, 9999]:
+        mol_copy = Chem.Mol(mol)
+        params = AllChem.ETKDGv3()
+        params.randomSeed = seed
+        params.numThreads = 0
+        params.pruneRmsThresh = rms_threshold
+        AllChem.EmbedMultipleConfs(mol_copy, numConfs=confs_per_seed, params=params)
 
     # Minimize with MMFF94s (like Omega does)
     try:
