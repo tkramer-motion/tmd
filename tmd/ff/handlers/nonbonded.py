@@ -80,43 +80,124 @@ def convert_to_oe(mol: Chem.Mol):
     return oemol
 
 
+def _make_carboxylic_acids_cis(rd_mol):
+    """Rotate trans carboxylic acid groups to cis configuration.
+
+    Some conformer generators produce conformers with trans carboxylic acid
+    (COOH) groups, which causes OpenEye's ELF algorithm to fail with "diverse
+    selection of confs failed". This function rotates any trans COOH groups to cis.
+
+    The cis configuration is also more physically relevant since trans COOH
+    has an internal hydrogen bond that makes it energetically unfavorable.
+
+    Parameters
+    ----------
+    rd_mol : RDKit Mol
+        Molecule with conformers to modify in place.
+
+    References
+    ----------
+    [1] OpenFF Toolkit issue #346: https://github.com/openforcefield/openff-toolkit/issues/346
+    [2] OpenEye ELF bug with trans COOH: https://github.com/openforcefield/openff-toolkit/pull/831
+    """
+    from rdkit.Chem import rdMolTransforms
+
+    # SMARTS for carboxylic acid: O=C-O-H
+    carboxylic_acid_smarts = Chem.MolFromSmarts("[OX1]=[CX3]-[OX2H1]")
+    matches = rd_mol.GetSubstructMatches(carboxylic_acid_smarts)
+
+    if not matches:
+        return
+
+    for match in matches:
+        o_double, c, o_h = match
+
+        # Find the hydrogen bonded to O-H
+        oh_atom = rd_mol.GetAtomWithIdx(o_h)
+        h_idx = None
+        for neighbor in oh_atom.GetNeighbors():
+            if neighbor.GetSymbol() == "H":
+                h_idx = neighbor.GetIdx()
+                break
+
+        if h_idx is None:
+            continue  # No explicit hydrogen found
+
+        # For each conformer, check if trans and rotate to cis
+        for conf in rd_mol.GetConformers():
+            # Get O=C-O-H dihedral: cis ~ 0°, trans ~ 180°
+            dihedral = rdMolTransforms.GetDihedralDeg(conf, o_double, c, o_h, h_idx)
+
+            # If trans (|dihedral| > 90°), rotate to cis (0°)
+            if abs(dihedral) > 90:
+                rdMolTransforms.SetDihedralDeg(conf, o_double, c, o_h, h_idx, 0.0)
+
+
 def oe_generate_conformations(oemol, sample_hydrogens=True):
-    """Generate conformations for the input molecule.
+    """Generate conformations for the input molecule using RDKit ETKDGv3.
+
+    This function generates conformers using RDKit's ETKDGv3 algorithm with
+    MMFF94s minimization, which produces high-quality conformers suitable for
+    AM1-ELF10 charge calculations without requiring OpenEye Omega.
+
+    The original input conformer is preserved and included with the ETKDGv3
+    conformers, which is required for compatibility with OpenEye's ELF algorithm.
+
+    Any carboxylic acid groups are rotated to cis configuration to work around
+    a known bug in OpenEye's ELF algorithm that fails on trans COOH conformers.
+
     The molecule is modified in place.
-
-    Note: This currently does not filter out trans carboxylic acids.
-    See https://github.com/openforcefield/openff-toolkit/pull/1171
-
-    Note: This may permute the molecule in-place during canonicalization.
-        (If the original atom ordering needs to be recovered, modify calling context using {Set/Get}MapIdx.)
 
     Parameters
     ----------
     oemol: oechem.OEMol
     sample_hydrogens: bool
+        (Ignored - kept for API compatibility.)
 
     References
     ----------
-    [1] https://docs.eyesopen.com/toolkits/cookbook/python/modeling/am1-bcc.html
+    [1] ELF trans-COOH bug: https://github.com/openforcefield/openff-toolkit/issues/346
     """
+    from openeye import oechem
 
-    from openeye import oeomega
+    # Convert OEMol to RDKit mol for ETKDGv3
+    ofs = oechem.oemolostream()
+    ofs.SetFormat(oechem.OEFormat_SDF)
+    ofs.openstring()
+    oechem.OEWriteMolecule(ofs, oemol)
+    sdf_string = ofs.GetString().decode("utf-8")
+    ofs.close()
 
-    # generate conformations using omega
-    omegaOpts = oeomega.OEOmegaOptions()
-    omegaOpts.GetTorDriveOptions().SetUseGPU(False)
-    omega = oeomega.OEOmega(omegaOpts)
-    # exclude the initial input conformer
-    omega.SetIncludeInput(False)
-    omega.SetCanonOrder(True)  # may not preserve input atom ordering
-    omega.SetSampleHydrogens(sample_hydrogens)
-    omega.SetEnergyWindow(15.0)
-    omega.SetMaxConfs(800)
-    omega.SetRMSThreshold(1.0)
+    # Parse with RDKit - this preserves the original input conformer
+    rd_mol = Chem.MolFromMolBlock(sdf_string, removeHs=False)
+    if rd_mol is None:
+        raise RuntimeError(f"Failed to convert OEMol to RDKit mol for '{oemol.GetTitle()}'")
 
-    has_confs = omega(oemol)
-    if not has_confs:
-        raise Exception(f"Unable to generate conformations for charge assignment for '{oemol.GetTitle()}'")
+    # Add hydrogens if needed
+    rd_mol = Chem.AddHs(rd_mol, addCoords=True)
+
+    # Generate additional conformers using RDKit ETKDGv3
+    rd_mol_etkdg = Chem.AddHs(Chem.MolFromMolBlock(sdf_string, removeHs=False), addCoords=True)
+    generate_conformations_etkdg(rd_mol_etkdg)  # Uses default: n_confs=800, rms_threshold=0.5
+
+    # Add ETKDGv3 conformers to the original
+    for conf in rd_mol_etkdg.GetConformers():
+        rd_mol.AddConformer(conf, assignId=True)
+
+    if rd_mol.GetNumConformers() == 0:
+        raise RuntimeError(f"ETKDGv3 failed to generate conformers for '{oemol.GetTitle()}'")
+
+    # Transfer all conformers back to OEMol (original + ETKDGv3)
+    oemol.DeleteConfs()
+    for conf in rd_mol.GetConformers():
+        coords = []
+        for i in range(rd_mol.GetNumAtoms()):
+            pos = conf.GetAtomPosition(i)
+            coords.extend([pos.x, pos.y, pos.z])
+        oemol.NewConf(oechem.OEFloatArray(coords))
+
+    # Set dimension to 3D (required for AM1 calculations)
+    oechem.OESetDimensionFromCoords(oemol)
 
 
 def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
@@ -172,6 +253,65 @@ def oe_assign_charges(mol, charge_model: str = AM1BCCELF10) -> NDArray:
 
     # returned charges are in TM units, in original atom ordering
     return inlined_constant * partial_charges[inv_permutation]
+
+
+def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshold: float = 1.0, max_iters: int = 100):
+    """
+    Generate conformations using RDKit ETKDGv3 with MMFF94s minimization.
+
+    This uses multiple random seeds for better conformational diversity,
+    combined with MMFF94s force field minimization (similar to Omega).
+
+    Parameters
+    ----------
+    mol: Chem.Mol
+        RDKit molecule (modified in place)
+    n_confs: int
+        Maximum number of conformers to generate (default 800)
+    rms_threshold: float
+        RMSD threshold for conformer pruning (default 0.5 Angstrom)
+
+    Returns
+    -------
+    None (molecule is modified in place)
+    """
+    from rdkit.Chem import AllChem
+
+    # Store original conformer if available
+    try:
+        original_conf = Chem.Mol(mol).GetConformer()
+    except ValueError:
+        original_conf = None
+
+    mol.RemoveAllConformers()
+
+    # Generate ETKDGv3 conformers with multiple random seeds for diversity
+    confs_per_seed = n_confs // 4
+    for seed in [42, 1234, 5678, 9999]:
+        mol_copy = Chem.Mol(mol)
+        params = AllChem.ETKDGv3()
+        params.randomSeed = seed
+        params.numThreads = 0
+        params.pruneRmsThresh = rms_threshold
+        AllChem.EmbedMultipleConfs(mol_copy, numConfs=confs_per_seed, params=params)
+
+    # Minimize with MMFF94s (like Omega does)
+    try:
+        AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant="MMFF94s", maxIters=max_iters, numThreads=0)
+    except Exception:
+        pass
+
+    for conf in mol_copy.GetConformers():
+        mol.AddConformer(conf, assignId=True)
+
+    # Fix carboxylic acids to cis configuration (required for OE ELF compatibility)
+    _make_carboxylic_acids_cis(mol)
+
+    if mol.GetNumConformers() == 0:
+        if original_conf is not None:
+            mol.AddConformer(original_conf)
+        else:
+            raise RuntimeError("ETKDGv3 failed to generate any conformers")
 
 
 def generate_exclusion_idxs(
@@ -1097,7 +1237,7 @@ class AM1CCCHandler(SerializableMixIn):
         self.smirks = smirks
         self.params = np.array(params, dtype=np.float64)
         self.props = props
-        self.supported_elements = {1, 6, 7, 8, 9, 14, 16, 17, 35, 53}  # note: omits phosphorus (15) for now
+        self.supported_elements = {1, 6, 7, 8, 9, 14, 15, 16, 17, 35, 53}
 
     def validate_input(self, mol):
         # TODO: read off supported elements from self.smirks, rather than hard-coding list of supported elements?
