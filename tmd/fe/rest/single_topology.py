@@ -32,6 +32,40 @@ from .bond import CanonicalBond, CanonicalProper, mkbond, mkproper
 from .interpolation import InterpolationFxn, InterpolationFxnName, Symmetric, get_interpolation_fxn
 from .queries import get_aliphatic_ring_bonds, get_rotatable_bonds
 
+# SMARTS pattern for amide: N bonded to C which has a double bond to O
+AMIDE_SMARTS = "[NX3,NX2:1][CX3:2](=[OX1:3])"
+
+
+def get_amide_atoms_and_bonds(mol: Chem.Mol) -> tuple[set[int], set[frozenset[int]]]:
+    """Find all amide atoms and bonds in a molecule.
+
+    Parameters
+    ----------
+    mol : Chem.Mol
+        The molecule to search
+
+    Returns
+    -------
+    tuple[set[int], set[frozenset[int]]]
+        A tuple of (amide_atoms, amide_bonds) where:
+        - amide_atoms is the set of atom indices that are part of an amide group (N, C, O)
+        - amide_bonds is the set of N-C bonds in amide groups (as frozensets)
+    """
+    query = Chem.MolFromSmarts(AMIDE_SMARTS)
+    matches = mol.GetSubstructMatches(query)
+
+    amide_atoms = set()
+    amide_bonds = set()
+
+    for match in matches:
+        n_idx, c_idx, o_idx = match
+        amide_atoms.add(n_idx)
+        amide_atoms.add(c_idx)
+        amide_atoms.add(o_idx)
+        amide_bonds.add(frozenset({n_idx, c_idx}))
+
+    return amide_atoms, amide_bonds
+
 
 def get_temperature_scale_interpolation_fxn(
     max_temperature_scale: float, interpolation: InterpolationFxnName
@@ -132,6 +166,58 @@ class SingleTopologyREST(SingleTopology):
 
         return inner_rest_idxs.union(outer_rest_idxs)
 
+    @staticmethod
+    def expand_rest_region_to_amides(atom_idxs: set[int], mol: Chem.Mol, nxg: nx.Graph) -> set[int]:
+        """Expand the REST region to include all atoms reachable without crossing an amide bond.
+
+        Starting from the given atom indices, performs a BFS traversal and includes all atoms
+        that can be reached without crossing an amide N-C bond. Amide atoms (N, C, O) themselves
+        are not included in the result.
+
+        Parameters
+        ----------
+        atom_idxs : set[int]
+            Initial set of atom indices in the REST region
+        mol : Chem.Mol
+            The molecule
+        nxg : nx.Graph
+            NetworkX graph representation of the molecule
+
+        Returns
+        -------
+        set[int]
+            Expanded set of atom indices
+        """
+        amide_atoms, amide_bonds = get_amide_atoms_and_bonds(mol)
+
+        # If no amides, return the original set
+        if not amide_atoms:
+            return atom_idxs
+
+        # BFS from initial atoms, stopping at amide bonds
+        visited = set()
+        queue = list(atom_idxs)
+
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            # Skip amide atoms - don't include them and don't traverse from them
+            if current in amide_atoms:
+                continue
+            visited.add(current)
+
+            for neighbor in nxg.neighbors(current):
+                if neighbor in visited:
+                    continue
+                # Don't cross amide bonds
+                bond = frozenset({current, neighbor})
+                if bond in amide_bonds:
+                    continue
+                queue.append(neighbor)
+
+        return visited
+
     def split_combined_idxs(self, combined_idxs):
         mol_a_idxs = []
         for idx in combined_idxs:
@@ -178,8 +264,13 @@ class SingleTopologyREST(SingleTopology):
     def rest_region_atom_idxs(self) -> set[int]:
         mol_a_idxs, mol_b_idxs = self.split_combined_idxs(self.base_rest_region_atom_idxs)
 
+        # First apply ring/terminal expansion
         expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
         expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
+
+        # Then expand to include all atoms back to first amide
+        expanded_set_a = self.expand_rest_region_to_amides(expanded_set_a, self.mol_a, self._nxg_a)
+        expanded_set_b = self.expand_rest_region_to_amides(expanded_set_b, self.mol_b, self._nxg_b)
 
         final_idxs = set([self.a_to_c[x] for x in expanded_set_a]).union([self.b_to_c[x] for x in expanded_set_b])
 
