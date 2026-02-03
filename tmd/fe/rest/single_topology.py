@@ -260,6 +260,18 @@ class SingleTopologyREST(SingleTopology):
 
         return idxs
 
+    @staticmethod
+    def _get_marked_smiles(mol: Chem.Mol, rest_region_idxs: set[int]) -> str:
+        """Generate SMILES with REST region atoms marked with atom map number 1."""
+        mol_copy = Chem.RWMol(mol)
+        for atom in mol_copy.GetAtoms():
+            if atom.GetIdx() in rest_region_idxs:
+                atom.SetAtomMapNum(1)
+            else:
+                atom.SetAtomMapNum(0)
+        mol_no_h = Chem.RemoveHs(mol_copy)
+        return Chem.MolToSmiles(mol_no_h)
+
     @cached_property
     def rest_region_atom_idxs(self) -> set[int]:
         mol_a_idxs, mol_b_idxs = self.split_combined_idxs(self.base_rest_region_atom_idxs)
@@ -269,10 +281,27 @@ class SingleTopologyREST(SingleTopology):
         expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
 
         # Then expand to include all atoms back to first amide
-        expanded_set_a = self.expand_rest_region_to_amides(expanded_set_a, self.mol_a, self._nxg_a)
-        expanded_set_b = self.expand_rest_region_to_amides(expanded_set_b, self.mol_b, self._nxg_b)
+        amide_expanded_a = self.expand_rest_region_to_amides(expanded_set_a, self.mol_a, self._nxg_a)
+        amide_expanded_b = self.expand_rest_region_to_amides(expanded_set_b, self.mol_b, self._nxg_b)
 
-        final_idxs = set([self.a_to_c[x] for x in expanded_set_a]).union([self.b_to_c[x] for x in expanded_set_b])
+        # Check if amide expansion changed the REST region
+        amide_expansion_changed_a = amide_expanded_a != expanded_set_a
+        amide_expansion_changed_b = amide_expanded_b != expanded_set_b
+
+        if amide_expansion_changed_a or amide_expansion_changed_b:
+            print("Amide expansion changed REST region:")
+            if amide_expansion_changed_a:
+                print(f"  mol_a: {len(expanded_set_a)} -> {len(amide_expanded_a)} atoms")
+            if amide_expansion_changed_b:
+                print(f"  mol_b: {len(expanded_set_b)} -> {len(amide_expanded_b)} atoms")
+
+        # Print marked SMILES
+        smiles_a = self._get_marked_smiles(self.mol_a, amide_expanded_a)
+        smiles_b = self._get_marked_smiles(self.mol_b, amide_expanded_b)
+        print(f"REST region mol_a: {smiles_a}")
+        print(f"REST region mol_b: {smiles_b}")
+
+        final_idxs = set([self.a_to_c[x] for x in amide_expanded_a]).union([self.b_to_c[x] for x in amide_expanded_b])
 
         return final_idxs
 
