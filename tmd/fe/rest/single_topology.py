@@ -171,8 +171,8 @@ class SingleTopologyREST(SingleTopology):
         """Expand the REST region to include all atoms reachable without crossing an amide bond.
 
         Starting from the given atom indices, performs a BFS traversal and includes all atoms
-        that can be reached without crossing an amide N-C bond. Amide atoms (N, C, O) themselves
-        are not included in the result.
+        that can be reached without crossing an amide N-C bond. Amide atoms (N, C, O) are
+        included in the result, but traversal stops at amide bonds.
 
         Parameters
         ----------
@@ -202,10 +202,11 @@ class SingleTopologyREST(SingleTopology):
             current = queue.pop(0)
             if current in visited:
                 continue
-            # Skip amide atoms - don't include them and don't traverse from them
+            visited.add(current)
+
+            # If this is an amide atom, include it but don't traverse from it
             if current in amide_atoms:
                 continue
-            visited.add(current)
 
             for neighbor in nxg.neighbors(current):
                 if neighbor in visited:
