@@ -168,11 +168,11 @@ class SingleTopologyREST(SingleTopology):
 
     @staticmethod
     def expand_rest_region_to_amides(atom_idxs: set[int], mol: Chem.Mol, nxg: nx.Graph) -> set[int]:
-        """Expand the REST region to include all atoms reachable without crossing an amide bond.
+        """Expand the REST region up to (and including) the nearest amide groups.
 
-        Starting from the given atom indices, performs a BFS traversal and includes all atoms
-        that can be reached without crossing an amide N-C bond. Amide atoms (N, C, O) are
-        included in the result, but traversal stops at amide bonds.
+        Starting from the given atom indices, performs a BFS traversal that stops at
+        amide N-C bonds. Then, for any amide group where at least one atom was reached,
+        all atoms of that amide group (N, C, O) are included in the result.
 
         Parameters
         ----------
@@ -194,7 +194,7 @@ class SingleTopologyREST(SingleTopology):
         if not amide_atoms:
             return atom_idxs
 
-        # BFS from initial atoms, stopping at amide bonds
+        # BFS from initial atoms, stopping at amide N-C bonds
         visited = set()
         queue = list(atom_idxs)
 
@@ -204,18 +204,21 @@ class SingleTopologyREST(SingleTopology):
                 continue
             visited.add(current)
 
-            # If this is an amide atom, include it but don't traverse from it
-            if current in amide_atoms:
-                continue
-
             for neighbor in nxg.neighbors(current):
                 if neighbor in visited:
                     continue
-                # Don't cross amide bonds
+                # Don't cross amide N-C bonds
                 bond = frozenset({current, neighbor})
                 if bond in amide_bonds:
                     continue
                 queue.append(neighbor)
+
+        # For any amide group where BFS reached at least one atom,
+        # include ALL atoms of that group (N, C, O)
+        query = Chem.MolFromSmarts(AMIDE_SMARTS)
+        for match in mol.GetSubstructMatches(query):
+            if visited & set(match):
+                visited |= set(match)
 
         return visited
 
