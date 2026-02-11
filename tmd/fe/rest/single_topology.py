@@ -32,40 +32,6 @@ from .bond import CanonicalBond, CanonicalProper, mkbond, mkproper
 from .interpolation import InterpolationFxn, InterpolationFxnName, Symmetric, get_interpolation_fxn
 from .queries import get_aliphatic_ring_bonds, get_rotatable_bonds
 
-# SMARTS pattern for amide: N bonded to C which has a double bond to O
-AMIDE_SMARTS = "[NX3,NX2:1][CX3:2](=[OX1:3])"
-
-
-def get_amide_atoms_and_bonds(mol: Chem.Mol) -> tuple[set[int], set[frozenset[int]]]:
-    """Find all amide atoms and bonds in a molecule.
-
-    Parameters
-    ----------
-    mol : Chem.Mol
-        The molecule to search
-
-    Returns
-    -------
-    tuple[set[int], set[frozenset[int]]]
-        A tuple of (amide_atoms, amide_bonds) where:
-        - amide_atoms is the set of atom indices that are part of an amide group (N, C, O)
-        - amide_bonds is the set of N-C bonds in amide groups (as frozensets)
-    """
-    query = Chem.MolFromSmarts(AMIDE_SMARTS)
-    matches = mol.GetSubstructMatches(query)
-
-    amide_atoms = set()
-    amide_bonds = set()
-
-    for match in matches:
-        n_idx, c_idx, o_idx = match
-        amide_atoms.add(n_idx)
-        amide_atoms.add(c_idx)
-        amide_atoms.add(o_idx)
-        amide_bonds.add(frozenset({n_idx, c_idx}))
-
-    return amide_atoms, amide_bonds
-
 
 def get_temperature_scale_interpolation_fxn(
     max_temperature_scale: float, interpolation: InterpolationFxnName
@@ -166,62 +132,6 @@ class SingleTopologyREST(SingleTopology):
 
         return inner_rest_idxs.union(outer_rest_idxs)
 
-    @staticmethod
-    def expand_rest_region_to_amides(atom_idxs: set[int], mol: Chem.Mol, nxg: nx.Graph) -> set[int]:
-        """Expand the REST region up to (and including) the nearest amide groups.
-
-        Starting from the given atom indices, performs a BFS traversal that stops at
-        amide N-C bonds. Then, for any amide group where at least one atom was reached,
-        all atoms of that amide group (N, C, O) are included in the result.
-
-        Parameters
-        ----------
-        atom_idxs : set[int]
-            Initial set of atom indices in the REST region
-        mol : Chem.Mol
-            The molecule
-        nxg : nx.Graph
-            NetworkX graph representation of the molecule
-
-        Returns
-        -------
-        set[int]
-            Expanded set of atom indices
-        """
-        amide_atoms, amide_bonds = get_amide_atoms_and_bonds(mol)
-
-        # If no amides, return the original set
-        if not amide_atoms:
-            return atom_idxs
-
-        # BFS from initial atoms, stopping at amide N-C bonds
-        visited = set()
-        queue = list(atom_idxs)
-
-        while queue:
-            current = queue.pop(0)
-            if current in visited:
-                continue
-            visited.add(current)
-
-            for neighbor in nxg.neighbors(current):
-                if neighbor in visited:
-                    continue
-                # Don't cross amide N-C bonds
-                bond = frozenset({current, neighbor})
-                if bond in amide_bonds:
-                    continue
-                queue.append(neighbor)
-
-        # For any amide group where BFS reached at least one atom,
-        # include ALL atoms of that group (N, C, O)
-        query = Chem.MolFromSmarts(AMIDE_SMARTS)
-        for match in mol.GetSubstructMatches(query):
-            if visited & set(match):
-                visited |= set(match)
-
-        return visited
-
     def split_combined_idxs(self, combined_idxs):
         mol_a_idxs = []
         for idx in combined_idxs:
@@ -264,48 +174,14 @@ class SingleTopologyREST(SingleTopology):
 
         return idxs
 
-    @staticmethod
-    def _get_marked_smiles(mol: Chem.Mol, rest_region_idxs: set[int]) -> str:
-        """Generate SMILES with REST region atoms marked with atom map number 1."""
-        mol_copy = Chem.RWMol(mol)
-        for atom in mol_copy.GetAtoms():
-            if atom.GetIdx() in rest_region_idxs:
-                atom.SetAtomMapNum(1)
-            else:
-                atom.SetAtomMapNum(0)
-        mol_no_h = Chem.RemoveHs(mol_copy)
-        return Chem.MolToSmiles(mol_no_h)
-
     @cached_property
     def rest_region_atom_idxs(self) -> set[int]:
         mol_a_idxs, mol_b_idxs = self.split_combined_idxs(self.base_rest_region_atom_idxs)
 
-        # First apply ring/terminal expansion
         expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
         expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
 
-        # Then expand to include all atoms back to first amide
-        amide_expanded_a = self.expand_rest_region_to_amides(expanded_set_a, self.mol_a, self._nxg_a)
-        amide_expanded_b = self.expand_rest_region_to_amides(expanded_set_b, self.mol_b, self._nxg_b)
-
-        # Check if amide expansion changed the REST region
-        amide_expansion_changed_a = amide_expanded_a != expanded_set_a
-        amide_expansion_changed_b = amide_expanded_b != expanded_set_b
-
-        if amide_expansion_changed_a or amide_expansion_changed_b:
-            print("Amide expansion changed REST region:")
-            if amide_expansion_changed_a:
-                print(f"  mol_a: {len(expanded_set_a)} -> {len(amide_expanded_a)} atoms")
-            if amide_expansion_changed_b:
-                print(f"  mol_b: {len(expanded_set_b)} -> {len(amide_expanded_b)} atoms")
-
-        # Print marked SMILES
-        smiles_a = self._get_marked_smiles(self.mol_a, amide_expanded_a)
-        smiles_b = self._get_marked_smiles(self.mol_b, amide_expanded_b)
-        print(f"REST region mol_a: {smiles_a}")
-        print(f"REST region mol_b: {smiles_b}")
-
-        final_idxs = set([self.a_to_c[x] for x in amide_expanded_a]).union([self.b_to_c[x] for x in amide_expanded_b])
+        final_idxs = set([self.a_to_c[x] for x in expanded_set_a]).union([self.b_to_c[x] for x in expanded_set_b])
 
         return final_idxs
 

@@ -137,17 +137,8 @@ def setup_chiral_bond_restraints(mol, conf, src_idx, dst_idx):
 
 def find_chiral_atoms(mol):
     """
-    Find atoms that require chiral restraints to prevent high-energy umbrella inversion.
-
-    This includes:
-    * CIP stereocenters (R/S, including unassigned) — tetrahedral atoms with 4 distinct
-      substituent groups, detected via RDKit's FindMolChiralCenters
-    * Trivalent sulfur and phosphorus — assumed to have non-invertible pyramidal geometry
-    * NF3-type nitrogen — specific non-invertible nitrogen (for software testing)
-
-    Non-stereocenter tetrahedral atoms (e.g., CH3, CH2, CF3) are excluded because their
-    equivalent substituents allow the pyramidal volume sign to flip via trivial thermal
-    motion (swapping identical atoms) rather than high-energy umbrella inversion.
+    Find chiral atoms in a molecule. Note that an atom is chiral if it has a non-invertible
+    energy barrier. Even a center like methane is considered chiral.
 
     Parameters
     ----------
@@ -158,21 +149,23 @@ def find_chiral_atoms(mol):
     -------
     set of int
         Chiral atoms
+
+    Notes
+    -----
+    May want to split this function into two definitions,
+    one that says methane has a chiral center, and one that doesn't.
     """
-    chiral_atoms = set()
-
-    # CIP stereocenters: tetrahedral atoms with 4 distinct substituent groups
-    Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
-    for idx, _ in Chem.FindMolChiralCenters(mol, includeUnassigned=True):
-        chiral_atoms.add(idx)
-
-    # Trivalent sulfur, phosphorus — non-invertible pyramidal geometry
-    # NF3-type nitrogen — specific non-invertible nitrogen, for software testing
-    pyramidal_patterns = [
-        "[#16X3,#15X3:1]",
-        "[#7X3:1](~F)(~F)~F",
+    # these should be mutually exclusive, but if any pattern is hit then the results
+    # are accumulated to a set
+    chiral_patterns = [
+        "[X4:1]",  # any tetrahedral atom
+        "[#16X3,#15X3:1]",  # trivalent sulfur, phosphorous are assumed to be non-invertible
+        "[#7X3:1](~F)(~F)~F",  # specific non-invertible nitrogen, for software testing
+        # TODO: handle invertible pyramidal nitrogen
     ]
-    for patt in pyramidal_patterns:
+
+    chiral_atoms = set()
+    for patt in chiral_patterns:
         query_mol = Chem.MolFromSmarts(patt)
         assert query_mol is not None
         for match in mol.GetSubstructMatches(query_mol):

@@ -4,6 +4,7 @@ from functools import cache
 
 import jax
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import pytest
 from numpy.typing import NDArray
@@ -317,3 +318,230 @@ def plot_interpolation_fxns():
     _ = plot_interpolation_fxn(Symmetric(Exponential(src, dst)))
     _ = plt.legend()
     plt.show()
+
+
+# --- Tests for expand_rest_region_to_amides ---
+
+from tmd.fe.rest.single_topology import get_amide_atoms_and_bonds
+from tmd.graph_utils import convert_to_nx
+
+
+def _get_atom_idx_by_map_num(mol, map_num):
+    """Helper: find atom index by atom map number."""
+    for atom in mol.GetAtoms():
+        if atom.GetAtomMapNum() == map_num:
+            return atom.GetIdx()
+    raise ValueError(f"No atom with map number {map_num}")
+
+
+def _get_atom_symbols(mol, idxs):
+    """Helper: get set of (idx, symbol) for readable assertions."""
+    return {(idx, mol.GetAtomWithIdx(idx).GetSymbol()) for idx in idxs}
+
+
+def _find_amide_atoms(mol):
+    """Helper: return (amide_n, carbonyl_c, carbonyl_o) for the first amide in mol."""
+    for match in mol.GetSubstructMatches(Chem.MolFromSmarts("[NX3:1][CX3:2](=[OX1:3])")):
+        return match
+    raise ValueError("No amide found")
+
+
+def test_expand_amides_includes_all_amide_atoms_from_c_side():
+    """When BFS reaches the amide from the C(=O) side, ALL amide atoms (N, C, O) are included.
+
+    Molecule: CH3-C(=O)-NH-CH3 (N-methylacetamide)
+    Starting from the methyl C on the C(=O) side, we should get:
+      methyl C + H's, C(=O), O, AND N -- but NOT the N-side methyl or its H's.
+    """
+    mol = Chem.AddHs(Chem.MolFromSmiles("CC(=O)NC"))
+    nxg = convert_to_nx(mol)
+
+    amide_n, carbonyl_c, carbonyl_o = _find_amide_atoms(mol)
+
+    # Find the methyl C on the C(=O) side
+    methyl_c_carbonyl_side = None
+    for neighbor in mol.GetAtomWithIdx(carbonyl_c).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != carbonyl_o and idx != amide_n and neighbor.GetSymbol() == "C":
+            methyl_c_carbonyl_side = idx
+    assert methyl_c_carbonyl_side is not None
+
+    result = SingleTopologyREST.expand_rest_region_to_amides({methyl_c_carbonyl_side}, mol, nxg)
+
+    # ALL amide atoms must be included
+    assert carbonyl_c in result
+    assert carbonyl_o in result
+    assert amide_n in result
+
+    # The methyl on the N side must NOT be in the result (past the amide boundary)
+    methyl_c_n_side = None
+    for neighbor in mol.GetAtomWithIdx(amide_n).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != carbonyl_c and neighbor.GetSymbol() == "C":
+            methyl_c_n_side = idx
+    assert methyl_c_n_side is not None
+    assert methyl_c_n_side not in result
+
+
+def test_expand_amides_includes_all_amide_atoms_from_n_side():
+    """When BFS reaches the amide from the N side, ALL amide atoms (N, C, O) are included.
+
+    Molecule: CH3-C(=O)-NH-CH3
+    Starting from the methyl on the N side, we should get:
+      that methyl + H's, N, H on N, C(=O), AND O -- but NOT the C-side methyl or its H's.
+    """
+    mol = Chem.AddHs(Chem.MolFromSmiles("CC(=O)NC"))
+    nxg = convert_to_nx(mol)
+
+    amide_n, carbonyl_c, carbonyl_o = _find_amide_atoms(mol)
+
+    # Find the methyl C on the N side
+    methyl_c_n_side = None
+    for neighbor in mol.GetAtomWithIdx(amide_n).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != carbonyl_c and neighbor.GetSymbol() == "C":
+            methyl_c_n_side = idx
+    assert methyl_c_n_side is not None
+
+    result = SingleTopologyREST.expand_rest_region_to_amides({methyl_c_n_side}, mol, nxg)
+
+    # ALL amide atoms must be included
+    assert amide_n in result
+    assert carbonyl_c in result
+    assert carbonyl_o in result
+
+    # H on N should be included (BFS reaches N, traverses to H)
+    n_hydrogens = [
+        n.GetIdx() for n in mol.GetAtomWithIdx(amide_n).GetNeighbors() if n.GetSymbol() == "H"
+    ]
+    for h_idx in n_hydrogens:
+        assert h_idx in result, f"H on N (idx={h_idx}) should be in expanded region"
+
+    # The methyl on the C(=O) side must NOT be in the result (past the amide boundary)
+    methyl_c_carbonyl_side = None
+    for neighbor in mol.GetAtomWithIdx(carbonyl_c).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != carbonyl_o and idx != amide_n and neighbor.GetSymbol() == "C":
+            methyl_c_carbonyl_side = idx
+    assert methyl_c_carbonyl_side is not None
+    assert methyl_c_carbonyl_side not in result
+
+
+def test_expand_amides_no_amide_returns_original():
+    """With no amides, the function returns the original set unchanged (early return)."""
+    mol = Chem.AddHs(Chem.MolFromSmiles("CCCC"))
+    nxg = convert_to_nx(mol)
+
+    start = {0, 3}
+    result = SingleTopologyREST.expand_rest_region_to_amides(start, mol, nxg)
+    assert result == start
+
+
+def test_expand_amides_stops_past_amide():
+    """Expansion includes the full amide group but NOT atoms beyond it.
+
+    Molecule: phenyl-C(=O)-NH-phenyl (benzanilide)
+    Starting from one phenyl ring, the amide (N, C, O) is included but the
+    other phenyl ring is not.
+    """
+    mol = Chem.AddHs(Chem.MolFromSmiles("c1ccc(C(=O)Nc2ccccc2)cc1"))
+    nxg = convert_to_nx(mol)
+
+    amide_atoms, amide_bonds = get_amide_atoms_and_bonds(mol)
+    assert len(amide_bonds) == 1
+
+    amide_n, carbonyl_c, carbonyl_o = _find_amide_atoms(mol)
+
+    # Find a ring atom on the C(=O) side
+    c_side_ring_atom = None
+    for neighbor in mol.GetAtomWithIdx(carbonyl_c).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != carbonyl_o and idx != amide_n:
+            c_side_ring_atom = idx
+            break
+
+    result = SingleTopologyREST.expand_rest_region_to_amides({c_side_ring_atom}, mol, nxg)
+
+    # ALL amide atoms should be included
+    assert carbonyl_c in result
+    assert carbonyl_o in result
+    assert amide_n in result
+
+    # Atoms bonded to N on the far side (N-side ring) should NOT be included
+    for neighbor in mol.GetAtomWithIdx(amide_n).GetNeighbors():
+        if neighbor.GetIdx() != carbonyl_c:
+            assert neighbor.GetIdx() not in result, (
+                f"Atom {neighbor.GetIdx()} ({neighbor.GetSymbol()}) past the amide should not be included"
+            )
+
+
+def test_expand_amides_multiple_amides():
+    """With two amides, BFS includes the nearest amide group but stops before the second.
+
+    Molecule: CH3-C(=O)-NH-CH2-C(=O)-NH-CH3 (a dipeptide-like chain)
+    Starting from the leftmost methyl, the first amide (N, C, O) is included
+    but no atoms past the first amide N should be reached.
+    """
+    mol = Chem.AddHs(Chem.MolFromSmiles("CC(=O)NCC(=O)NC"))
+    nxg = convert_to_nx(mol)
+
+    amide_atoms, amide_bonds = get_amide_atoms_and_bonds(mol)
+    assert len(amide_bonds) == 2  # two amide N-C bonds
+
+    # Get both amide groups
+    query = Chem.MolFromSmarts("[NX3:1][CX3:2](=[OX1:3])")
+    matches = mol.GetSubstructMatches(query)
+    assert len(matches) == 2
+
+    start = 0
+    result = SingleTopologyREST.expand_rest_region_to_amides({start}, mol, nxg)
+
+    # The first amide group (the one whose C is bonded to atom 0's neighbor) must be fully included
+    first_amide_n, first_amide_c, first_amide_o = matches[0]
+    assert first_amide_c in result
+    assert first_amide_o in result
+    assert first_amide_n in result
+
+    # The second amide's atoms that are NOT shared with the first should NOT be in the result
+    # (they're past the first amide boundary)
+    second_amide_n, second_amide_c, second_amide_o = matches[1]
+    # The CH2 between amides and atoms past it should not be reached
+    # Find an atom only reachable by crossing the first amide
+    assert second_amide_c not in result or second_amide_c == first_amide_c
+    # The last methyl should definitely not be included
+    last_methyl_c = None
+    for neighbor in mol.GetAtomWithIdx(second_amide_n).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != second_amide_c and neighbor.GetSymbol() == "C":
+            last_methyl_c = idx
+    if last_methyl_c is not None:
+        assert last_methyl_c not in result
+
+
+def test_expand_amides_starting_at_amide_atom():
+    """If the initial REST region includes an amide atom, the full amide group is included.
+
+    Molecule: CH3-C(=O)-NH-CH3
+    Starting from the carbonyl C itself, we should get the full amide group (N, C, O)
+    plus the C-side methyl + H's. The N-side methyl should not be included.
+    """
+    mol = Chem.AddHs(Chem.MolFromSmiles("CC(=O)NC"))
+    nxg = convert_to_nx(mol)
+
+    amide_n, carbonyl_c, carbonyl_o = _find_amide_atoms(mol)
+
+    result = SingleTopologyREST.expand_rest_region_to_amides({carbonyl_c}, mol, nxg)
+
+    # ALL amide atoms should be included
+    assert carbonyl_c in result
+    assert carbonyl_o in result
+    assert amide_n in result
+
+    # N-side methyl should NOT be included (past the amide boundary)
+    methyl_c_n_side = None
+    for neighbor in mol.GetAtomWithIdx(amide_n).GetNeighbors():
+        idx = neighbor.GetIdx()
+        if idx != carbonyl_c and neighbor.GetSymbol() == "C":
+            methyl_c_n_side = idx
+    assert methyl_c_n_side is not None
+    assert methyl_c_n_side not in result
