@@ -491,6 +491,8 @@ def setup_end_state(
     a_to_c: NDArray,
     b_to_c: NDArray,
     anchored_dummy_groups: dict[int, tuple[Optional[int], frozenset[int]]],
+    chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
 ) -> GuestSystem:
     """
     Setup end-state for mol_a with dummy atoms of mol_b attached. The mapped indices will correspond
@@ -520,6 +522,12 @@ def setup_end_state(
     anchored_dummy_groups: dict[int, tuple[Optional[int], frozenset[int]]]
         mapping from anchor atom to (optional) angle anchor and dummy group. Indices refer to atoms in mol_b.
 
+    chiral_atom_restraint_k: float
+        Force constant for chiral atom restraints. Set to 0 to disable.
+
+    chiral_bond_restraint_k: float
+        Force constant for chiral bond restraints. Set to 0 to disable.
+
     Returns
     -------
     GuestSystem
@@ -531,7 +539,7 @@ def setup_end_state(
     all_dummy_improper_idxs_, all_dummy_improper_params_ = [], []
     for anchor, (nbr, dg) in anchored_dummy_groups.items():
         all_idxs, all_params = setup_dummy_interactions_from_ff(
-            ff, mol_b, dg, anchor, nbr, core[:, 1], DEFAULT_CHIRAL_ATOM_RESTRAINT_K, DEFAULT_CHIRAL_BOND_RESTRAINT_K
+            ff, mol_b, dg, anchor, nbr, core[:, 1], chiral_atom_restraint_k, chiral_bond_restraint_k
         )
         # append idxs
         all_dummy_angle_idxs_.extend(all_idxs[1])
@@ -610,13 +618,13 @@ def setup_end_state(
     mol_a_top = topology.BaseTopology(mol_a, ff)
     mol_a_bond_params, mol_a_hb = mol_a_top.parameterize_harmonic_bond(ff.hb_handle.params)
     mol_a_chiral_atom, mol_a_chiral_bond = mol_a_top.setup_chiral_restraints(
-        DEFAULT_CHIRAL_ATOM_RESTRAINT_K, DEFAULT_CHIRAL_BOND_RESTRAINT_K
+        chiral_atom_restraint_k, chiral_bond_restraint_k
     )
 
     mol_b_top = topology.BaseTopology(mol_b, ff)
     mol_b_bond_params, mol_b_hb = mol_b_top.parameterize_harmonic_bond(ff.hb_handle.params)
     mol_b_chiral_atom, _ = mol_b_top.setup_chiral_restraints(
-        DEFAULT_CHIRAL_ATOM_RESTRAINT_K, DEFAULT_CHIRAL_BOND_RESTRAINT_K
+        chiral_atom_restraint_k, chiral_bond_restraint_k
     )
 
     all_dummy_bond_idxs_, all_dummy_bond_params_ = [], []
@@ -1305,7 +1313,15 @@ class AlignedNonbondedPairlist(AlignedPotential):
 
 
 class SingleTopology(AtomMapMixin):
-    def __init__(self, mol_a: Chem.Mol, mol_b: Chem.Mol, core: NDArray, forcefield: Forcefield):
+    def __init__(
+        self,
+        mol_a: Chem.Mol,
+        mol_b: Chem.Mol,
+        core: NDArray,
+        forcefield: Forcefield,
+        chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+        chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
+    ):
         """
         SingleTopology combines two molecules through a common core. The combined mol has
         atom indices laid out such that mol_a is identically mapped to the combined mol indices.
@@ -1327,11 +1343,19 @@ class SingleTopology(AtomMapMixin):
 
         forcefield: ff.Forcefield
             Forcefield to be used for parameterization.
+
+        chiral_atom_restraint_k: float
+            Force constant for chiral atom restraints. Set to 0 to disable.
+
+        chiral_bond_restraint_k: float
+            Force constant for chiral bond restraints. Set to 0 to disable.
         """
         # initialize the mixin to get the a_to_c, b_to_c, c_to_a, c_to_b, and c_flags
         super().__init__(mol_a, mol_b, core)
 
         self.ff = forcefield
+        self.chiral_atom_restraint_k = chiral_atom_restraint_k
+        self.chiral_bond_restraint_k = chiral_bond_restraint_k
 
         a_charge = Chem.GetFormalCharge(mol_a)
         b_charge = Chem.GetFormalCharge(mol_b)
@@ -1582,7 +1606,15 @@ class SingleTopology(AtomMapMixin):
             Vacuum system
         """
         return setup_end_state(
-            self.ff, self.mol_a, self.mol_b, self.core, self.a_to_c, self.b_to_c, self.anchored_dummy_groups_ab
+            self.ff,
+            self.mol_a,
+            self.mol_b,
+            self.core,
+            self.a_to_c,
+            self.b_to_c,
+            self.anchored_dummy_groups_ab,
+            chiral_atom_restraint_k=self.chiral_atom_restraint_k,
+            chiral_bond_restraint_k=self.chiral_bond_restraint_k,
         )
 
     def _setup_end_state_dst(self):
@@ -1596,7 +1628,15 @@ class SingleTopology(AtomMapMixin):
             Vacuum system
         """
         return setup_end_state(
-            self.ff, self.mol_b, self.mol_a, self.core[:, ::-1], self.b_to_c, self.a_to_c, self.anchored_dummy_groups_ba
+            self.ff,
+            self.mol_b,
+            self.mol_a,
+            self.core[:, ::-1],
+            self.b_to_c,
+            self.a_to_c,
+            self.anchored_dummy_groups_ba,
+            chiral_atom_restraint_k=self.chiral_atom_restraint_k,
+            chiral_bond_restraint_k=self.chiral_bond_restraint_k,
         )
 
     @cached_property

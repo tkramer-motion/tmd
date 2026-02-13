@@ -391,25 +391,29 @@ class BaseTopology:
         conf = get_romol_conf(mol)
 
         # chiral atoms
-        chiral_atom_restr_idxs = np.array(chiral_utils.setup_all_chiral_atom_restr_idxs(mol, conf), np.int32)
-        chiral_atom_restr_idxs = chiral_atom_restr_idxs.reshape(-1, 4)
-
-        chiral_atom_params = chiral_atom_restraint_k * np.ones(len(chiral_atom_restr_idxs))
+        if chiral_atom_restraint_k == 0:
+            chiral_atom_restr_idxs = np.array([], np.int32).reshape(-1, 4)
+            chiral_atom_params = np.array([], np.float64)
+        else:
+            chiral_atom_restr_idxs = np.array(chiral_utils.setup_all_chiral_atom_restr_idxs(mol, conf), np.int32)
+            chiral_atom_restr_idxs = chiral_atom_restr_idxs.reshape(-1, 4)
+            chiral_atom_params = chiral_atom_restraint_k * np.ones(len(chiral_atom_restr_idxs))
         assert len(chiral_atom_params) == len(chiral_atom_restr_idxs)  # TODO: can this be checked in Potential::bind ?
         chiral_atom_potential = potentials.ChiralAtomRestraint(chiral_atom_restr_idxs).bind(chiral_atom_params)
 
         # chiral bonds
-        chiral_bonds = chiral_utils.find_chiral_bonds(mol)
         chiral_bond_restr_idxs = []
         chiral_bond_restr_signs = []
         chiral_bond_params = []
-        for src_idx, dst_idx in chiral_bonds:
-            idxs, signs = chiral_utils.setup_chiral_bond_restraints(mol, conf, src_idx, dst_idx)
-            for ii in idxs:
-                assert ii not in chiral_bond_restr_idxs
-            chiral_bond_restr_idxs.extend(idxs)
-            chiral_bond_restr_signs.extend(signs)
-            chiral_bond_params.extend(chiral_bond_restraint_k for _ in idxs)  # TODO: double-check this
+        if chiral_bond_restraint_k != 0:
+            chiral_bonds = chiral_utils.find_chiral_bonds(mol)
+            for src_idx, dst_idx in chiral_bonds:
+                idxs, signs = chiral_utils.setup_chiral_bond_restraints(mol, conf, src_idx, dst_idx)
+                for ii in idxs:
+                    assert ii not in chiral_bond_restr_idxs
+                chiral_bond_restr_idxs.extend(idxs)
+                chiral_bond_restr_signs.extend(signs)
+                chiral_bond_params.extend(chiral_bond_restraint_k for _ in idxs)  # TODO: double-check this
 
         chiral_bond_restr_idxs = np.array(chiral_bond_restr_idxs, dtype=np.int32).reshape(-1, 4)
         chiral_bond_restr_signs = np.array(chiral_bond_restr_signs)

@@ -22,7 +22,7 @@ from numpy.typing import NDArray
 from openmm import app
 from rdkit import Chem
 
-from tmd.constants import NBParamIdx
+from tmd.constants import DEFAULT_CHIRAL_ATOM_RESTRAINT_K, DEFAULT_CHIRAL_BOND_RESTRAINT_K, NBParamIdx
 from tmd.fe.single_topology import AlignedPotential, AtomMapFlags, SingleTopology
 from tmd.fe.system import GuestSystem, HostGuestSystem, HostSystem
 from tmd.ff import Forcefield
@@ -68,6 +68,8 @@ class SingleTopologyREST(SingleTopology):
         forcefield: Forcefield,
         max_temperature_scale: float,
         temperature_scale_interpolation: InterpolationFxnName = "exponential",
+        chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+        chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
     ):
         """
         Parameters
@@ -89,8 +91,14 @@ class SingleTopologyREST(SingleTopology):
 
         temperature_scale_interpolation: str
             Interpolation function to use for temperature scaling. One of "linear", "quadratic", or "exponential"
+
+        chiral_atom_restraint_k: float
+            Force constant for chiral atom restraints. Set to 0 to disable.
+
+        chiral_bond_restraint_k: float
+            Force constant for chiral bond restraints. Set to 0 to disable.
         """
-        super().__init__(mol_a, mol_b, core, forcefield)
+        super().__init__(mol_a, mol_b, core, forcefield, chiral_atom_restraint_k, chiral_bond_restraint_k)
         self._temperature_scale_interpolation_fxn: InterpolationFxn = get_temperature_scale_interpolation_fxn(
             max_temperature_scale, temperature_scale_interpolation
         )

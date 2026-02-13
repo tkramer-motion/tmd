@@ -26,7 +26,13 @@ from openmm import app
 from rdkit import Chem
 
 from tmd._vendored.pymbar.mbar import MBAR
-from tmd.constants import DEFAULT_POSITIONAL_RESTRAINT_K, DEFAULT_PRESSURE, DEFAULT_TEMP
+from tmd.constants import (
+    DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    DEFAULT_CHIRAL_BOND_RESTRAINT_K,
+    DEFAULT_POSITIONAL_RESTRAINT_K,
+    DEFAULT_PRESSURE,
+    DEFAULT_TEMP,
+)
 from tmd.fe import model_utils
 from tmd.fe.bar import DEFAULT_MAXIMUM_ITERATIONS, DEFAULT_RELATIVE_TOLERANCE, DEFAULT_SOLVER_PROTOCOL
 from tmd.fe.free_energy import (
@@ -757,6 +763,8 @@ def estimate_relative_free_energy_bisection(
     min_overlap: Optional[float] = None,
     min_cutoff: Optional[float] = 0.7,
     temperature: float = DEFAULT_TEMP,
+    chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
 ) -> SimulationResult:
     r"""Estimate relative free energy between mol_a and mol_b via independent simulations with a dynamic lambda schedule
     determined by successively bisecting the lambda interval between the pair of states with the greatest BAR
@@ -804,6 +812,12 @@ def estimate_relative_free_energy_bisection(
     temperature: float
         Temperature (Kelvin) to run simulation at, defaults to tmd.constants.DEFAULT_TEMP
 
+    chiral_atom_restraint_k: float
+        Force constant for chiral atom restraints. Set to 0 to disable.
+
+    chiral_bond_restraint_k: float
+        Force constant for chiral bond restraints. Set to 0 to disable.
+
     Returns
     -------
     SimulationResult
@@ -817,7 +831,7 @@ def estimate_relative_free_energy_bisection(
     if temperature != DEFAULT_TEMP:
         warnings.warn(f"Using non Standard temperature ({DEFAULT_TEMP:.1f}) of {temperature:.1f}")
 
-    single_topology = SingleTopology(mol_a, mol_b, core, ff)
+    single_topology = SingleTopology(mol_a, mol_b, core, ff, chiral_atom_restraint_k, chiral_bond_restraint_k)
 
     lambda_interval = lambda_interval or (0.0, 1.0)
     lambda_min, lambda_max = lambda_interval[0], lambda_interval[1]
@@ -1057,6 +1071,8 @@ def estimate_relative_free_energy_bisection_hrex(
     min_overlap: Optional[float] = None,
     min_cutoff: Optional[float] = 0.7,
     temperature: float = DEFAULT_TEMP,
+    chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
 ) -> HREXSimulationResult:
     """
     Estimate relative free energy between mol_a and mol_b using Hamiltonian Replica EXchange (HREX) sampling of a
@@ -1104,6 +1120,12 @@ def estimate_relative_free_energy_bisection_hrex(
     temperature: float
         Temperature (Kelvin) to run simulation at, defaults to tmd.constants.DEFAULT_TEMP
 
+    chiral_atom_restraint_k: float
+        Force constant for chiral atom restraints. Set to 0 to disable.
+
+    chiral_bond_restraint_k: float
+        Force constant for chiral bond restraints. Set to 0 to disable.
+
     Returns
     -------
     HREXSimulationResult
@@ -1128,9 +1150,11 @@ def estimate_relative_free_energy_bisection_hrex(
             ff,
             max_temperature_scale=hrex_params.rest_params.max_temperature_scale,
             temperature_scale_interpolation=hrex_params.rest_params.temperature_scale_interpolation,
+            chiral_atom_restraint_k=chiral_atom_restraint_k,
+            chiral_bond_restraint_k=chiral_bond_restraint_k,
         )
         if hrex_params.rest_params
-        else SingleTopology(mol_a, mol_b, core, ff)
+        else SingleTopology(mol_a, mol_b, core, ff, chiral_atom_restraint_k, chiral_bond_restraint_k)
     )
 
     lambda_interval = lambda_interval or (0.0, 1.0)
@@ -1181,6 +1205,8 @@ def run_vacuum(
     n_windows: Optional[int] = None,
     min_overlap: Optional[float] = None,
     min_cutoff: Optional[float] = None,
+    chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
 ):
     if md_params is not None and md_params.local_md_params is not None:
         md_params = replace(md_params, local_md_params=None)
@@ -1200,6 +1226,8 @@ def run_vacuum(
         n_windows=n_windows,
         min_overlap=min_overlap,
         min_cutoff=min_cutoff,
+        chiral_atom_restraint_k=chiral_atom_restraint_k,
+        chiral_bond_restraint_k=chiral_bond_restraint_k,
     )
 
 
@@ -1213,6 +1241,8 @@ def run_solvent(
     n_windows: Optional[int] = None,
     min_overlap: Optional[float] = None,
     min_cutoff: Optional[float] = None,
+    chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
 ):
     if md_params is not None and md_params.water_sampling_params is not None:
         md_params = replace(md_params, water_sampling_params=None)
@@ -1235,6 +1265,8 @@ def run_solvent(
         n_windows=n_windows,
         min_overlap=min_overlap,
         min_cutoff=min_cutoff,
+        chiral_atom_restraint_k=chiral_atom_restraint_k,
+        chiral_bond_restraint_k=chiral_bond_restraint_k,
     )
     return solvent_res, solvent_host_config
 
@@ -1249,6 +1281,8 @@ def run_complex(
     n_windows: Optional[int] = None,
     min_overlap: Optional[float] = None,
     min_cutoff: Optional[float] = 0.7,
+    chiral_atom_restraint_k: float = DEFAULT_CHIRAL_ATOM_RESTRAINT_K,
+    chiral_bond_restraint_k: float = DEFAULT_CHIRAL_BOND_RESTRAINT_K,
 ):
     complex_host_config = builders.build_protein_system(
         protein, forcefield.protein_ff, forcefield.water_ff, mols=[mol_a, mol_b], box_margin=0.1
@@ -1265,5 +1299,7 @@ def run_complex(
         n_windows=n_windows,
         min_overlap=min_overlap,
         min_cutoff=min_cutoff,
+        chiral_atom_restraint_k=chiral_atom_restraint_k,
+        chiral_bond_restraint_k=chiral_bond_restraint_k,
     )
     return complex_res, complex_host_config
