@@ -219,18 +219,14 @@ class SingleTopologyREST(SingleTopology):
 
     @cached_property
     def target_propers(self) -> dict[int, CanonicalProper]:
-        """Returns a dict of propers in the combined ligand, keyed on index, that are candidates for softening and
-        involve an atom in the REST region."""
-        return {
-            idx: proper
-            for (idx, proper) in self.candidate_propers.items()
-            if any(idx in self.rest_region_atom_idxs for idx in proper.idxs)
-        }
+        """Returns a dict of propers in the combined ligand, keyed on index, that are targeted for REST
+        softening. Includes all candidate propers (rotatable or aliphatic ring bond torsions) to ensure
+        conformational barriers throughout the ligand are reduced at intermediate lambda values."""
+        return dict(self.candidate_propers)
 
     @cached_property
     def target_proper_idxs(self) -> list[int]:
-        """Returns a list of indices of propers in the combined ligand that are candidates for softening and involve an
-        atom in the REST region."""
+        """Returns a list of indices of propers in the combined ligand that are targeted for REST softening."""
         return list(self.target_propers.keys())
 
     def get_energy_scale_factor(self, lamb: float) -> float:
