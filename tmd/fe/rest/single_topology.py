@@ -176,14 +176,14 @@ class SingleTopologyREST(SingleTopology):
 
     @cached_property
     def rest_region_atom_idxs(self) -> set[int]:
-        mol_a_idxs, mol_b_idxs = self.split_combined_idxs(self.base_rest_region_atom_idxs)
-
-        expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
-        expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
-
-        final_idxs = set([self.a_to_c[x] for x in expanded_set_a]).union([self.b_to_c[x] for x in expanded_set_b])
-
-        return final_idxs
+        # Include ALL ligand atoms in the REST region. This follows the REST2 convention where all
+        # solute-solute and solute-solvent interactions are scaled at intermediate lambda. This is
+        # critical for molecules with large absolute charges (e.g. phosphonates with formal charge -2),
+        # where even small charge perturbations on core atoms create disproportionately large energy
+        # changes due to interactions with highly-charged scaffold atoms. Limiting the REST region to
+        # only atoms with changing bonded parameters leaves these interactions unscaled, creating HREX
+        # bottlenecks that lead to poor convergence and inaccurate free energies.
+        return set(range(self.get_num_atoms()))
 
     @cached_property
     def aliphatic_ring_bonds(self) -> set[CanonicalBond]:
