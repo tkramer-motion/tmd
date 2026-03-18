@@ -287,18 +287,24 @@ def generate_conformations_etkdg(mol: Chem.Mol, n_confs: int = 800, rms_threshol
 
     mol.RemoveAllConformers()
 
-    # Generate ETKDGv3 conformers
-    params = AllChem.ETKDGv3()
-    params.randomSeed = 42
-    params.numThreads = 0
-    params.pruneRmsThresh = rms_threshold
-    AllChem.EmbedMultipleConfs(mol, numConfs=n_confs, params=params)
+    # Generate ETKDGv3 conformers with multiple random seeds for diversity
+    confs_per_seed = n_confs // 4
+    for seed in [42, 1234, 5678, 9999]:
+        mol_copy = Chem.Mol(mol)
+        params = AllChem.ETKDGv3()
+        params.randomSeed = seed
+        params.numThreads = 0
+        params.pruneRmsThresh = rms_threshold
+        AllChem.EmbedMultipleConfs(mol_copy, numConfs=confs_per_seed, params=params)
 
     # Minimize with MMFF94s (like Omega does)
     try:
-        AllChem.MMFFOptimizeMoleculeConfs(mol, mmffVariant="MMFF94s", maxIters=max_iters, numThreads=0)
+        AllChem.MMFFOptimizeMoleculeConfs(mol_copy, mmffVariant="MMFF94s", maxIters=max_iters, numThreads=0)
     except Exception:
         pass
+
+    for conf in mol_copy.GetConformers():
+        mol.AddConformer(conf, assignId=True)
 
     # Fix carboxylic acids to cis configuration (required for OE ELF compatibility)
     _make_carboxylic_acids_cis(mol)
