@@ -132,6 +132,100 @@ class SingleTopologyREST(SingleTopology):
 
         return inner_rest_idxs.union(outer_rest_idxs)
 
+    @staticmethod
+    def _get_fused_ring_systems(cycles: list[list[int]]) -> list[set[int]]:
+        """Group cycles into fused ring systems.
+
+        Two cycles that share at least one atom belong to the same fused system.
+
+        Returns
+        -------
+        list[set[int]]
+            Each element is the set of all atom indices in a fused ring system.
+        """
+        if not cycles:
+            return []
+
+        cycle_sets = [set(c) for c in cycles]
+        # Union-find via iterative merging
+        systems: list[set[int]] = [cycle_sets[0]]
+        for cs in cycle_sets[1:]:
+            merged = cs
+            remaining = []
+            for system in systems:
+                if merged & system:
+                    merged = merged | system
+                else:
+                    remaining.append(system)
+            remaining.append(merged)
+            systems = remaining
+        return systems
+
+    @staticmethod
+    def expand_rest_region_to_nearest_ring(atom_idxs: set[int], nxg: nx.Graph, cycles: list[list[int]]) -> set[int]:
+        """Expand the REST region to include the nearest fused ring system and one bond beyond.
+
+        From non-ring atoms in atom_idxs, performs a BFS traversal that stops when a ring
+        is reached. The entire fused ring system is included, plus one bond beyond the ring
+        system to ensure ring torsions are captured.
+
+        Parameters
+        ----------
+        atom_idxs : set[int]
+            Initial set of atom indices in the REST region
+        nxg : nx.Graph
+            NetworkX graph representation of the molecule
+        cycles : list[list[int]]
+            Ring cycles from nx.cycle_basis
+
+        Returns
+        -------
+        set[int]
+            Expanded set of atom indices
+        """
+        ring_atoms: set[int] = set()
+        for cycle in cycles:
+            ring_atoms.update(cycle)
+
+        if not ring_atoms:
+            return atom_idxs
+
+        ring_systems = SingleTopologyREST._get_fused_ring_systems(cycles)
+
+        # Map each ring atom to its ring system index
+        atom_to_system: dict[int, int] = {}
+        for i, system in enumerate(ring_systems):
+            for atom in system:
+                atom_to_system[atom] = i
+
+        visited = set(atom_idxs)
+        # Only BFS from non-ring atoms to find nearest rings
+        queue = [a for a in atom_idxs if a not in ring_atoms]
+        reached_system_idxs: set[int] = set()
+
+        while queue:
+            current = queue.pop(0)
+            for neighbor in nxg.neighbors(current):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                if neighbor in ring_atoms:
+                    # Found a ring — include the entire fused ring system
+                    sys_idx = atom_to_system[neighbor]
+                    reached_system_idxs.add(sys_idx)
+                    visited.update(ring_systems[sys_idx])
+                else:
+                    queue.append(neighbor)
+
+        # One bond beyond reached ring systems for torsion coverage
+        for sys_idx in reached_system_idxs:
+            for ring_atom in ring_systems[sys_idx]:
+                for neighbor in nxg.neighbors(ring_atom):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+
+        return visited
+
     def split_combined_idxs(self, combined_idxs):
         mol_a_idxs = []
         for idx in combined_idxs:
@@ -174,14 +268,48 @@ class SingleTopologyREST(SingleTopology):
 
         return idxs
 
+    @staticmethod
+    def _get_marked_smiles(mol: Chem.Mol, rest_region_idxs: set[int]) -> str:
+        """Generate SMILES with REST region atoms marked with atom map number 1."""
+        mol_copy = Chem.RWMol(mol)
+        for atom in mol_copy.GetAtoms():
+            if atom.GetIdx() in rest_region_idxs:
+                atom.SetAtomMapNum(1)
+            else:
+                atom.SetAtomMapNum(0)
+        mol_no_h = Chem.RemoveHs(mol_copy)
+        return Chem.MolToSmiles(mol_no_h)
+
     @cached_property
     def rest_region_atom_idxs(self) -> set[int]:
         mol_a_idxs, mol_b_idxs = self.split_combined_idxs(self.base_rest_region_atom_idxs)
 
+        # First apply ring/terminal expansion
         expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
         expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
 
-        final_idxs = set([self.a_to_c[x] for x in expanded_set_a]).union([self.b_to_c[x] for x in expanded_set_b])
+        # Then expand to nearest ring (+ one bond beyond for torsion coverage)
+        ring_expanded_a = self.expand_rest_region_to_nearest_ring(expanded_set_a, self._nxg_a, self._cycles_a)
+        ring_expanded_b = self.expand_rest_region_to_nearest_ring(expanded_set_b, self._nxg_b, self._cycles_b)
+
+        # Check if ring expansion changed the REST region
+        ring_expansion_changed_a = ring_expanded_a != expanded_set_a
+        ring_expansion_changed_b = ring_expanded_b != expanded_set_b
+
+        if ring_expansion_changed_a or ring_expansion_changed_b:
+            print("Ring expansion changed REST region:")
+            if ring_expansion_changed_a:
+                print(f"  mol_a: {len(expanded_set_a)} -> {len(ring_expanded_a)} atoms")
+            if ring_expansion_changed_b:
+                print(f"  mol_b: {len(expanded_set_b)} -> {len(ring_expanded_b)} atoms")
+
+        # Print marked SMILES
+        smiles_a = self._get_marked_smiles(self.mol_a, ring_expanded_a)
+        smiles_b = self._get_marked_smiles(self.mol_b, ring_expanded_b)
+        print(f"REST region mol_a: {smiles_a}")
+        print(f"REST region mol_b: {smiles_b}")
+
+        final_idxs = set([self.a_to_c[x] for x in ring_expanded_a]).union([self.b_to_c[x] for x in ring_expanded_b])
 
         return final_idxs
 
