@@ -32,40 +32,6 @@ from .bond import CanonicalBond, CanonicalProper, mkbond, mkproper
 from .interpolation import InterpolationFxn, InterpolationFxnName, Symmetric, get_interpolation_fxn
 from .queries import get_aliphatic_ring_bonds, get_rotatable_bonds
 
-# SMARTS pattern for amide: N bonded to C which has a double bond to O
-AMIDE_SMARTS = "[NX3,NX2:1][CX3:2](=[OX1:3])"
-
-
-def get_amide_atoms_and_bonds(mol: Chem.Mol) -> tuple[set[int], set[frozenset[int]]]:
-    """Find all amide atoms and bonds in a molecule.
-
-    Parameters
-    ----------
-    mol : Chem.Mol
-        The molecule to search
-
-    Returns
-    -------
-    tuple[set[int], set[frozenset[int]]]
-        A tuple of (amide_atoms, amide_bonds) where:
-        - amide_atoms is the set of atom indices that are part of an amide group (N, C, O)
-        - amide_bonds is the set of N-C bonds in amide groups (as frozensets)
-    """
-    query = Chem.MolFromSmarts(AMIDE_SMARTS)
-    matches = mol.GetSubstructMatches(query)
-
-    amide_atoms = set()
-    amide_bonds = set()
-
-    for match in matches:
-        n_idx, c_idx, o_idx = match
-        amide_atoms.add(n_idx)
-        amide_atoms.add(c_idx)
-        amide_atoms.add(o_idx)
-        amide_bonds.add(frozenset({n_idx, c_idx}))
-
-    return amide_atoms, amide_bonds
-
 
 def get_temperature_scale_interpolation_fxn(
     max_temperature_scale: float, interpolation: InterpolationFxnName
@@ -167,58 +133,96 @@ class SingleTopologyREST(SingleTopology):
         return inner_rest_idxs.union(outer_rest_idxs)
 
     @staticmethod
-    def expand_rest_region_to_amides(atom_idxs: set[int], mol: Chem.Mol, nxg: nx.Graph) -> set[int]:
-        """Expand the REST region up to (and including) the nearest amide groups.
+    def _get_fused_ring_systems(cycles: list[list[int]]) -> list[set[int]]:
+        """Group cycles into fused ring systems.
 
-        Starting from the given atom indices, performs a BFS traversal that stops at
-        amide N-C bonds. Then, for any amide group where at least one atom was reached,
-        all atoms of that amide group (N, C, O) are included in the result.
+        Two cycles that share at least one atom belong to the same fused system.
+
+        Returns
+        -------
+        list[set[int]]
+            Each element is the set of all atom indices in a fused ring system.
+        """
+        if not cycles:
+            return []
+
+        cycle_sets = [set(c) for c in cycles]
+        # Union-find via iterative merging
+        systems: list[set[int]] = [cycle_sets[0]]
+        for cs in cycle_sets[1:]:
+            merged = cs
+            remaining = []
+            for system in systems:
+                if merged & system:
+                    merged = merged | system
+                else:
+                    remaining.append(system)
+            remaining.append(merged)
+            systems = remaining
+        return systems
+
+    @staticmethod
+    def expand_rest_region_to_nearest_ring(atom_idxs: set[int], nxg: nx.Graph, cycles: list[list[int]]) -> set[int]:
+        """Expand the REST region to include the nearest fused ring system and one bond beyond.
+
+        From non-ring atoms in atom_idxs, performs a BFS traversal that stops when a ring
+        is reached. The entire fused ring system is included, plus one bond beyond the ring
+        system to ensure ring torsions are captured.
 
         Parameters
         ----------
         atom_idxs : set[int]
             Initial set of atom indices in the REST region
-        mol : Chem.Mol
-            The molecule
         nxg : nx.Graph
             NetworkX graph representation of the molecule
+        cycles : list[list[int]]
+            Ring cycles from nx.cycle_basis
 
         Returns
         -------
         set[int]
             Expanded set of atom indices
         """
-        amide_atoms, amide_bonds = get_amide_atoms_and_bonds(mol)
+        ring_atoms: set[int] = set()
+        for cycle in cycles:
+            ring_atoms.update(cycle)
 
-        # If no amides, return the original set
-        if not amide_atoms:
+        if not ring_atoms:
             return atom_idxs
 
-        # BFS from initial atoms, stopping at amide N-C bonds
-        visited = set()
-        queue = list(atom_idxs)
+        ring_systems = SingleTopologyREST._get_fused_ring_systems(cycles)
+
+        # Map each ring atom to its ring system index
+        atom_to_system: dict[int, int] = {}
+        for i, system in enumerate(ring_systems):
+            for atom in system:
+                atom_to_system[atom] = i
+
+        visited = set(atom_idxs)
+        # Only BFS from non-ring atoms to find nearest rings
+        queue = [a for a in atom_idxs if a not in ring_atoms]
+        reached_system_idxs: set[int] = set()
 
         while queue:
             current = queue.pop(0)
-            if current in visited:
-                continue
-            visited.add(current)
-
             for neighbor in nxg.neighbors(current):
                 if neighbor in visited:
                     continue
-                # Don't cross amide N-C bonds
-                bond = frozenset({current, neighbor})
-                if bond in amide_bonds:
-                    continue
-                queue.append(neighbor)
+                visited.add(neighbor)
+                if neighbor in ring_atoms:
+                    # Found a ring — include the entire fused ring system
+                    sys_idx = atom_to_system[neighbor]
+                    reached_system_idxs.add(sys_idx)
+                    visited.update(ring_systems[sys_idx])
+                else:
+                    queue.append(neighbor)
 
-        # For any amide group where BFS reached at least one atom,
-        # include ALL atoms of that group (N, C, O)
-        query = Chem.MolFromSmarts(AMIDE_SMARTS)
-        for match in mol.GetSubstructMatches(query):
-            if visited & set(match):
-                visited |= set(match)
+        # One bond beyond reached ring systems for torsion coverage
+        for sys_idx in reached_system_idxs:
+            for ring_atom in ring_systems[sys_idx]:
+                for neighbor in nxg.neighbors(ring_atom):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
 
         return visited
 
@@ -284,28 +288,28 @@ class SingleTopologyREST(SingleTopology):
         expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
         expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
 
-        # Then expand to include all atoms back to first amide
-        amide_expanded_a = self.expand_rest_region_to_amides(expanded_set_a, self.mol_a, self._nxg_a)
-        amide_expanded_b = self.expand_rest_region_to_amides(expanded_set_b, self.mol_b, self._nxg_b)
+        # Then expand to nearest ring (+ one bond beyond for torsion coverage)
+        ring_expanded_a = self.expand_rest_region_to_nearest_ring(expanded_set_a, self._nxg_a, self._cycles_a)
+        ring_expanded_b = self.expand_rest_region_to_nearest_ring(expanded_set_b, self._nxg_b, self._cycles_b)
 
-        # Check if amide expansion changed the REST region
-        amide_expansion_changed_a = amide_expanded_a != expanded_set_a
-        amide_expansion_changed_b = amide_expanded_b != expanded_set_b
+        # Check if ring expansion changed the REST region
+        ring_expansion_changed_a = ring_expanded_a != expanded_set_a
+        ring_expansion_changed_b = ring_expanded_b != expanded_set_b
 
-        if amide_expansion_changed_a or amide_expansion_changed_b:
-            print("Amide expansion changed REST region:")
-            if amide_expansion_changed_a:
-                print(f"  mol_a: {len(expanded_set_a)} -> {len(amide_expanded_a)} atoms")
-            if amide_expansion_changed_b:
-                print(f"  mol_b: {len(expanded_set_b)} -> {len(amide_expanded_b)} atoms")
+        if ring_expansion_changed_a or ring_expansion_changed_b:
+            print("Ring expansion changed REST region:")
+            if ring_expansion_changed_a:
+                print(f"  mol_a: {len(expanded_set_a)} -> {len(ring_expanded_a)} atoms")
+            if ring_expansion_changed_b:
+                print(f"  mol_b: {len(expanded_set_b)} -> {len(ring_expanded_b)} atoms")
 
         # Print marked SMILES
-        smiles_a = self._get_marked_smiles(self.mol_a, amide_expanded_a)
-        smiles_b = self._get_marked_smiles(self.mol_b, amide_expanded_b)
+        smiles_a = self._get_marked_smiles(self.mol_a, ring_expanded_a)
+        smiles_b = self._get_marked_smiles(self.mol_b, ring_expanded_b)
         print(f"REST region mol_a: {smiles_a}")
         print(f"REST region mol_b: {smiles_b}")
 
-        final_idxs = set([self.a_to_c[x] for x in amide_expanded_a]).union([self.b_to_c[x] for x in amide_expanded_b])
+        final_idxs = set([self.a_to_c[x] for x in ring_expanded_a]).union([self.b_to_c[x] for x in ring_expanded_b])
 
         return final_idxs
 
