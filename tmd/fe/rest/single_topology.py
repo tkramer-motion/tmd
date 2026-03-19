@@ -162,17 +162,54 @@ class SingleTopologyREST(SingleTopology):
         return systems
 
     @staticmethod
-    def expand_rest_region_to_nearest_ring(atom_idxs: set[int], nxg: nx.Graph, cycles: list[list[int]]) -> set[int]:
+    def _get_branch_atoms(nxg: nx.Graph, ring_atoms: set[int], ring_systems: list[set[int]]) -> set[int]:
+        """Identify non-ring atoms that are on branches (dead-end paths) rather than linkers between ring systems.
+
+        A connected component of non-ring atoms is a "branch" if it is adjacent to at most one fused ring system.
+        Components adjacent to two or more ring systems are linkers and are excluded.
+
+        Returns
+        -------
+        set[int]
+            Set of non-ring atom indices that are on branches.
+        """
+        # Map each ring atom to its ring system index
+        atom_to_system: dict[int, int] = {}
+        for i, system in enumerate(ring_systems):
+            for atom in system:
+                atom_to_system[atom] = i
+
+        non_ring_nodes = [n for n in nxg.nodes() if n not in ring_atoms]
+        non_ring_subgraph = nxg.subgraph(non_ring_nodes)
+
+        branch_atoms: set[int] = set()
+        for component in nx.connected_components(non_ring_subgraph):
+            # Count how many distinct ring systems this component is adjacent to
+            adjacent_systems: set[int] = set()
+            for atom in component:
+                for neighbor in nxg.neighbors(atom):
+                    if neighbor in atom_to_system:
+                        adjacent_systems.add(atom_to_system[neighbor])
+            if len(adjacent_systems) <= 1:
+                branch_atoms.update(component)
+
+        return branch_atoms
+
+    @staticmethod
+    def expand_rest_region_to_nearest_ring(
+        atom_idxs: set[int], base_atom_idxs: set[int], nxg: nx.Graph, cycles: list[list[int]]
+    ) -> set[int]:
         """Expand the REST region to include the nearest fused ring system and one bond beyond.
 
-        From non-ring atoms in atom_idxs, performs a BFS traversal that stops when a ring
-        is reached. The entire fused ring system is included, plus one bond beyond the ring
-        system to ensure ring torsions are captured.
+        Only BFS-es from original base REST atoms (not atoms added by prior expansion steps) that
+        are on branches (dead-end paths), not on linker chains between ring systems.
 
         Parameters
         ----------
         atom_idxs : set[int]
-            Initial set of atom indices in the REST region
+            Full set of atom indices after prior expansion (e.g. expand_rest_region_in_mol)
+        base_atom_idxs : set[int]
+            Original base REST region atom indices (before any expansion)
         nxg : nx.Graph
             NetworkX graph representation of the molecule
         cycles : list[list[int]]
@@ -198,9 +235,12 @@ class SingleTopologyREST(SingleTopology):
             for atom in system:
                 atom_to_system[atom] = i
 
+        branch_atoms = SingleTopologyREST._get_branch_atoms(nxg, ring_atoms, ring_systems)
+
         visited = set(atom_idxs)
-        # Only BFS from non-ring atoms to find nearest rings
-        queue = [a for a in atom_idxs if a not in ring_atoms]
+        # Only BFS from original base atoms that are non-ring AND on branches
+        bfs_seeds = (base_atom_idxs & branch_atoms) - ring_atoms
+        queue = list(bfs_seeds)
         reached_system_idxs: set[int] = set()
 
         while queue:
@@ -288,9 +328,13 @@ class SingleTopologyREST(SingleTopology):
         expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
         expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
 
-        # Then expand to nearest ring (+ one bond beyond for torsion coverage)
-        ring_expanded_a = self.expand_rest_region_to_nearest_ring(expanded_set_a, self._nxg_a, self._cycles_a)
-        ring_expanded_b = self.expand_rest_region_to_nearest_ring(expanded_set_b, self._nxg_b, self._cycles_b)
+        # Then expand branch atoms to nearest ring (+ one bond beyond for torsion coverage)
+        ring_expanded_a = self.expand_rest_region_to_nearest_ring(
+            expanded_set_a, set(mol_a_idxs), self._nxg_a, self._cycles_a
+        )
+        ring_expanded_b = self.expand_rest_region_to_nearest_ring(
+            expanded_set_b, set(mol_b_idxs), self._nxg_b, self._cycles_b
+        )
 
         # Check if ring expansion changed the REST region
         ring_expansion_changed_a = ring_expanded_a != expanded_set_a
