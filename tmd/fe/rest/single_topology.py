@@ -197,12 +197,13 @@ class SingleTopologyREST(SingleTopology):
 
     @staticmethod
     def expand_rest_region_to_nearest_ring(
-        atom_idxs: set[int], base_atom_idxs: set[int], nxg: nx.Graph, cycles: list[list[int]]
+        atom_idxs: set[int], base_atom_idxs: set[int], mol: Chem.Mol, nxg: nx.Graph, cycles: list[list[int]]
     ) -> set[int]:
         """Expand the REST region to include the nearest fused ring system and one bond beyond.
 
-        Only BFS-es from original base REST atoms (not atoms added by prior expansion steps) that
-        are on branches (dead-end paths), not on linker chains between ring systems.
+        Only BFS-es from original base REST heavy atoms (not atoms added by prior expansion steps) that
+        are on branches (dead-end paths), not on linker chains between ring systems. Hydrogen atoms are
+        excluded from BFS seeds to prevent H atoms on ring carbons from spuriously pulling in rings.
 
         Parameters
         ----------
@@ -210,6 +211,8 @@ class SingleTopologyREST(SingleTopology):
             Full set of atom indices after prior expansion (e.g. expand_rest_region_in_mol)
         base_atom_idxs : set[int]
             Original base REST region atom indices (before any expansion)
+        mol : Chem.Mol
+            The molecule (used to identify hydrogen atoms)
         nxg : nx.Graph
             NetworkX graph representation of the molecule
         cycles : list[list[int]]
@@ -237,9 +240,13 @@ class SingleTopologyREST(SingleTopology):
 
         branch_atoms = SingleTopologyREST._get_branch_atoms(nxg, ring_atoms, ring_systems)
 
+        # Exclude hydrogen atoms — H on ring carbons form singleton "branch" components
+        # but should not trigger ring expansion
+        heavy_atom_idxs = {a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() != 1}
+
         visited = set(atom_idxs)
-        # Only BFS from original base atoms that are non-ring AND on branches
-        bfs_seeds = (base_atom_idxs & branch_atoms) - ring_atoms
+        # Only BFS from original base heavy atoms that are non-ring AND on branches
+        bfs_seeds = (base_atom_idxs & branch_atoms & heavy_atom_idxs) - ring_atoms
         queue = list(bfs_seeds)
         reached_system_idxs: set[int] = set()
 
@@ -330,10 +337,10 @@ class SingleTopologyREST(SingleTopology):
 
         # Then expand branch atoms to nearest ring (+ one bond beyond for torsion coverage)
         ring_expanded_a = self.expand_rest_region_to_nearest_ring(
-            expanded_set_a, set(mol_a_idxs), self._nxg_a, self._cycles_a
+            expanded_set_a, set(mol_a_idxs), self.mol_a, self._nxg_a, self._cycles_a
         )
         ring_expanded_b = self.expand_rest_region_to_nearest_ring(
-            expanded_set_b, set(mol_b_idxs), self._nxg_b, self._cycles_b
+            expanded_set_b, set(mol_b_idxs), self.mol_b, self._nxg_b, self._cycles_b
         )
 
         # Check if ring expansion changed the REST region

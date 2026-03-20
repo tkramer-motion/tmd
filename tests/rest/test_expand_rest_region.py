@@ -25,7 +25,7 @@ def expand_from_base(smiles: str, base_idxs: set[int]) -> set[int]:
     nxg = convert_to_nx(mol)
     cycles = nx.cycle_basis(nxg)
     step1 = SingleTopologyREST.expand_rest_region_in_mol(base_idxs, cycles, mol)
-    return SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base_idxs, nxg, cycles)
+    return SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base_idxs, mol, nxg, cycles)
 
 
 class TestExpandRestRegionToNearestRing:
@@ -37,7 +37,7 @@ class TestExpandRestRegionToNearestRing:
         nxg = convert_to_nx(mol)
         cycles = nx.cycle_basis(nxg)
         atom_idxs = {0}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(atom_idxs, atom_idxs, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(atom_idxs, atom_idxs, mol, nxg, cycles)
         assert result == atom_idxs
 
     def test_atom_already_in_ring(self):
@@ -51,7 +51,7 @@ class TestExpandRestRegionToNearestRing:
 
         single_ring_atom = next(iter(ring_atoms))
         base = {single_ring_atom}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
         # Ring atoms are not branch atoms, so no BFS occurs
         assert result == base
 
@@ -64,7 +64,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ring_atoms = set()
         for cycle in cycles:
@@ -81,7 +81,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ring_atoms = set()
         for cycle in cycles:
@@ -107,7 +107,7 @@ class TestExpandRestRegionToNearestRing:
         ch2_2 = get_atom_idx_by_map_num(mol, 3)
 
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         assert methyl_c in result
         assert ch2_1 in result
@@ -127,7 +127,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         methyl_neighbors = set(nxg.neighbors(methyl_c))
         attached_ring_idx = None
@@ -162,7 +162,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         assert methyl_c in result
 
@@ -180,7 +180,7 @@ class TestExpandRestRegionToNearestRing:
         mol = get_mol("C1CCCCC1")
         nxg = convert_to_nx(mol)
         cycles = nx.cycle_basis(nxg)
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(set(), set(), nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(set(), set(), mol, nxg, cycles)
         assert result == set()
 
     def test_multiple_branch_atoms(self):
@@ -193,7 +193,7 @@ class TestExpandRestRegionToNearestRing:
         methyl_1 = get_atom_idx_by_map_num(mol, 1)
         methyl_2 = get_atom_idx_by_map_num(mol, 2)
         base = {methyl_1, methyl_2}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ring_atoms = set()
         for cycle in cycles:
@@ -214,7 +214,7 @@ class TestExpandRestRegionToNearestRing:
         linker_c = get_atom_idx_by_map_num(mol, 1)
         base = {linker_c}
         # atom_idxs = base (no prior expansion)
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         # Linker atom is between two ring systems, so it should NOT be a BFS seed.
         # Result should just be the original set.
@@ -231,7 +231,7 @@ class TestExpandRestRegionToNearestRing:
         ch2_1 = get_atom_idx_by_map_num(mol, 1)
         ch2_2 = get_atom_idx_by_map_num(mol, 2)
         base = {ch2_1, ch2_2}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         # Neither ring should be pulled in
         assert result == base
@@ -245,7 +245,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ring_atoms = set()
         for cycle in cycles:
@@ -261,7 +261,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ring_atoms = set()
         for cycle in cycles:
@@ -281,7 +281,7 @@ class TestExpandRestRegionToNearestRing:
 
         nh2 = get_atom_idx_by_map_num(mol, 1)
         base = {nh2}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ch2 = get_atom_idx_by_map_num(mol, 2)
         ring_atoms = set()
@@ -301,7 +301,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         all_ring_atoms = set()
         for cycle in cycles:
@@ -317,7 +317,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         all_ring_atoms = set()
         for cycle in cycles:
@@ -333,7 +333,7 @@ class TestExpandRestRegionToNearestRing:
 
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         ring_systems = SingleTopologyREST._get_fused_ring_systems(cycles)
         methyl_neighbors = set(nxg.neighbors(methyl_c))
@@ -368,13 +368,42 @@ class TestExpandRestRegionToNearestRing:
         nh = get_atom_idx_by_map_num(mol, 1)
         co = get_atom_idx_by_map_num(mol, 2)
         base = {nh, co}
-        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, nxg, cycles)
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
 
         # Linker atoms connect two ring systems, so no ring expansion should occur
         all_ring_atoms = set()
         for cycle in cycles:
             all_ring_atoms.update(cycle)
         assert not all_ring_atoms.issubset(result)
+
+
+    def test_hydrogen_on_ring_does_not_expand(self):
+        """H atoms bonded to ring carbons should NOT trigger ring expansion."""
+        # Cyclohexane with explicit H — start from an H bonded to a ring carbon
+        mol = get_mol("C1CCCCC1")
+        nxg = convert_to_nx(mol)
+        cycles = nx.cycle_basis(nxg)
+
+        ring_atoms = set()
+        for cycle in cycles:
+            ring_atoms.update(cycle)
+
+        # Find an H atom bonded to a ring carbon
+        h_on_ring = None
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() == 1:
+                nb = atom.GetNeighbors()[0]
+                if nb.GetIdx() in ring_atoms:
+                    h_on_ring = atom.GetIdx()
+                    break
+        assert h_on_ring is not None
+
+        base = {h_on_ring}
+        result = SingleTopologyREST.expand_rest_region_to_nearest_ring(base, base, mol, nxg, cycles)
+
+        # The H is a branch atom topologically, but should be filtered out as H
+        # No ring expansion should occur
+        assert result == base
 
 
 class TestGetBranchAtoms:
@@ -492,7 +521,7 @@ class TestPipelineIntegration:
         base = {methyl_c}
 
         step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol)
-        step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, nxg, cycles)
+        step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, mol, nxg, cycles)
 
         ring_atoms = set()
         for cycle in cycles:
@@ -522,7 +551,7 @@ class TestPipelineIntegration:
             step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol)
             assert ring_0.issubset(step1)
 
-            step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, nxg, cycles)
+            step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, mol, nxg, cycles)
 
             one_bond_beyond = set()
             for ra in ring_0:
@@ -544,7 +573,7 @@ class TestPipelineIntegration:
         base = {ch2_1, ch2_2}
 
         step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol)
-        step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, nxg, cycles)
+        step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, mol, nxg, cycles)
 
         # Neither ring should be fully included
         all_ring_atoms = set()
