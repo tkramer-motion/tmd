@@ -19,12 +19,11 @@ import numpy as np
 import pytest
 from jax import jit, value_and_grad
 from jax import numpy as jnp
-from openeye.oechem import OEChemIsLicensed
 from scipy.optimize import minimize
 
 from tmd import testsystems
 from tmd.constants import BOLTZ, KCAL_TO_KJ
-from tmd.fe import absolute_hydration
+from tmd.fe.absolute import hydration as absolute_hydration
 from tmd.fe.free_energy import LocalMDParams, MDParams
 from tmd.fe.reweighting import one_sided_exp
 from tmd.ff import Forcefield
@@ -32,6 +31,13 @@ from tmd.potentials.nonbonded import coulomb_interaction_group_energy, coulomb_p
 from tmd.potentials.potential import get_bound_potential_by_type
 from tmd.potentials.potentials import Nonbonded
 from tmd.testsystems import fetch_freesolv
+
+try:
+    from openeye.oechem import OEChemIsLicensed
+except ImportError:
+    # OpenEye Toolkits may not be installed
+    def OEChemIsLicensed():
+        return False
 
 
 def test_run_solvent_absolute_hydration():
@@ -120,7 +126,6 @@ def test_fit_solvent_absolute_hydration_ccc_params(forcefield):
         charges,
         lig_idxs,
         env_idxs,
-        beta=nb_pot.beta,
         cutoff=nb_pot.cutoff,
     )
 

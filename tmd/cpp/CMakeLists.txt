@@ -20,7 +20,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(tmd LANGUAGES CXX CUDA)
 
-find_package(Python 3.12...<4 COMPONENTS Interpreter Development REQUIRED)
+find_package(Python 3.12...<4 COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
 set(PYBIND11_PYTHON_VERSION ${Python_VERSION} CACHE STRING "Which version of python we're building wrappers against")
@@ -68,12 +68,12 @@ set(LIBRARY_NAME custom_ops)
 set(PYBIND_SRC_DIR pybind11)
 
 if(NOT EXISTS ${PYBIND_SRC_DIR})
-  execute_process(COMMAND git clone --depth 1 --branch v2.13.6 https://github.com/pybind/pybind11.git ${PYBIND_SRC_DIR})
+  execute_process(COMMAND git clone --depth 1 --branch v3.0.4 https://github.com/pybind/pybind11.git ${PYBIND_SRC_DIR})
 endif()
 
 set(EIGEN_SRC_DIR eigen)
 if(NOT EXISTS ${EIGEN_SRC_DIR})
-  execute_process(COMMAND git clone --depth 1 --branch 3.3.9 https://gitlab.com/libeigen/eigen.git ${EIGEN_SRC_DIR})
+  execute_process(COMMAND git clone --depth 1 --branch 5.0.1 https://gitlab.com/libeigen/eigen.git ${EIGEN_SRC_DIR})
 endif()
 
 add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/${PYBIND_SRC_DIR} ${CMAKE_CURRENT_BINARY_DIR}/${PYBIND_SRC_DIR})
@@ -94,7 +94,7 @@ set_source_files_properties(
 
 
 # NO_EXTRAS is needed since cuda doesn't use flto
-pybind11_add_module(${LIBRARY_NAME} SHARED NO_EXTRAS
+pybind11_add_module(${LIBRARY_NAME} MODULE NO_EXTRAS
   src/fixed_point.hpp
   src/wrap_kernels.cpp
   src/mover.cu
@@ -121,6 +121,7 @@ pybind11_add_module(${LIBRARY_NAME} SHARED NO_EXTRAS
   src/log_flat_bottom_bond.cu
   src/harmonic_angle.cu
   src/periodic_torsion.cu
+  src/harmonic_torsion.cu
   src/chiral_atom_restraint.cu
   src/chiral_bond_restraint.cu
   src/langevin_integrator.cu

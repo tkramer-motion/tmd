@@ -90,7 +90,7 @@ if install_custom_ops():
 
 setup(
     name="tmd",
-    version="0.3.1",
+    version="0.4.1",
     cmdclass={"build_ext": CMakeBuild},
     description="A high-performance differentiable molecular dynamics and optimization engine",
     long_description=long_description,
@@ -107,18 +107,9 @@ setup(
     ext_modules=ext_modules,
     packages=find_packages(),
     python_requires=">=3.12",
-    install_requires=[
-        "jax",
-        "jaxlib>0.4.1",
-        "networkx",
-        "numpy",
-        "rdkit",
-        "scipy",
-        "matplotlib",
-        "openmm",
-    ],
+    install_requires=["jax", "jaxlib>0.4.1", "networkx", "numpy", "rdkit", "scipy", "matplotlib", "openmm", "mdtraj"],
     extras_require={
-        "dev": ["ruff==0.9.3", "mypy==1.14.1", "pre-commit==4.1.0", "tbump==6.11.*"],
+        "dev": ["ruff==0.9.3", "mypy==1.20.2", "pre-commit==4.1.0", "tbump==6.11.*"],
         "test": [
             "pytest",
             "pytest-cov",
@@ -129,6 +120,7 @@ setup(
             "py3Dmol==2.0.3",
         ],
         "viz": ["py3Dmol"],
+        "mdtraj": ["mdtraj"],
     },
     package_data={
         "tmd": [

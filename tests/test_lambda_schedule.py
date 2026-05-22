@@ -21,7 +21,7 @@ from tmd.fe.lambda_schedule import (
     validate_lambda_schedule,
 )
 
-pytestmark = [pytest.mark.nocuda]
+pytestmark = [pytest.mark.nogpu]
 
 
 def test_validate_lambda_schedule():

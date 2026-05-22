@@ -50,7 +50,10 @@ def test_serialization_of_ffs():
     for path in glob("tmd/ff/params/smirnoff_*.py"):
         handlers, protein_ff, water_ff = deserialize_handlers(open(path).read())
         ff = Forcefield.from_handlers(handlers, protein_ff=protein_ff, water_ff=water_ff)
-        assert ff.protein_ff == constants.DEFAULT_PROTEIN_FF
+        if "amber14" in path:
+            assert ff.protein_ff == "amber14/protein.ff14SB"
+        else:
+            assert ff.protein_ff == constants.DEFAULT_PROTEIN_FF
         assert ff.water_ff == constants.DEFAULT_WATER_FF
         for handler_name, handler in dataclasses.asdict(ff).items():
             if handler_name == "env_bcc_handle":
@@ -86,6 +89,28 @@ def test_amber_am1bcc_and_am1ccc_forcefields_have_identical_parameters():
             params_ccc, idxs_ccc = params_ccc
             np.testing.assert_array_equal(idxs_bcc, idxs_ccc)
         np.testing.assert_array_equal(params_bcc, params_ccc)
+
+
+@pytest.mark.parametrize(
+    "ffname",
+    [
+        "smirnoff_2_0_0_precomputed.py",
+        "smirnoff_2_0_0_precomputed_ccc.py",
+        "smirnoff_2_2_1_precomputed.py",
+    ],
+)
+def test_precomputed_ff_preserves_user_charges(ffname: str) -> None:
+    ff = Forcefield.load_from_file(ffname)
+    with path_to_internal_file("tmd.testsystems.fep_benchmark.hif2a", "ligands.sdf") as ligand_path:
+        mol = read_sdf(ligand_path)[0]
+
+    for i, atm in enumerate(mol.GetAtoms()):
+        atm.SetDoubleProp("PartialCharge", i / 100)
+
+    assert ff.q_handle is not None and not isinstance(ff.q_handle, nonbonded.NNHandler)
+    qs = ff.q_handle.parameterize(mol)
+    for i, q in enumerate(qs):
+        assert q == (i / 100) * np.sqrt(constants.ONE_4PI_EPS0)
 
 
 def test_loading_forcefield_from_file():
@@ -216,7 +241,7 @@ def test_amber14_tip3p_matches_tip3p():
     with NamedTemporaryFile(suffix=".pdb") as temp:
         Chem.MolToPDBFile(mol, temp.name)
         # tip3p will fail to handle ions
-        with pytest.raises(ValueError, match="No template found for residue 1"):
+        with pytest.raises(ValueError, match="No template found for residue"):
             builders.build_protein_system(temp.name, constants.DEFAULT_PROTEIN_FF, tip3p_water_ff)
 
         # Amber14/tip3p handles ions without issue
