@@ -451,12 +451,12 @@ def test_run_abfe(
 ):
     leg_results_hashes = {
         "solvent": (
-            "220a0ddf08d3677c028d6ab12bb210bc7e6825e0fbeb575824b9b0f3044c1bcf",
-            "90846a75884a668c5de0ddf14776b3266a037988c9cc049a8fbb011db810e40b",
+            "98712af1d9a1e960b4d0f4a9898acde0767d55736fac3622aa9439daeb866e4c",
+            "9d718cae41d68a04bc39f3102ce45445c1c69f84983d3b85118ae8eedc8cbfe4",
         ),
         "complex": (
-            "e1dc85cb2cf22fecfdbd403e57144f9a9e0e6146bc5f78bd5eba826d25fff9c0",
-            "2e8ce51a4f0c99c0c2eb13500a9f64809a355917a76eb91b08e7eb918143be1a",
+            "b768c61995c59501afb8113ec7229b6994e2ca425e66d16e3af9c86b2d3f82de",
+            "da5fb456aafe6b3cacdcccb8e20b27bff228eb6b464cc70508027a7e1fa7c681",
         ),
     }
 
@@ -632,7 +632,12 @@ def test_build_rbfe_graph_charge_hop():
 @pytest.mark.nocuda
 @pytest.mark.parametrize(
     "parameters_to_adjust, expected_edges",
-    [({"ring_matches_ring_only": True}, 58), ({"max_connected_components": 2}, 58), ({"enforce_core_core": False}, 57)],
+    [
+        ({"ring_matches_ring_only": True, "constrain_hydrogens": False}, 58),
+        ({"max_connected_components": 2, "constrain_hydrogens": False}, 58),
+        ({"enforce_core_core": False, "constrain_hydrogens": False}, 57),
+        ({"enforce_core_core": False, "constrain_hydrogens": True}, 59),
+    ],
 )
 def test_build_rbfe_graph_atom_mapping_parameters(parameters_to_adjust, expected_edges):
     atom_mapping_kwargs = DEFAULT_ATOM_MAPPING_KWARGS.copy()
@@ -766,6 +771,7 @@ def verify_leg_results_hashes(leg_dir: Path, expected_hash: str):
     "leg, n_windows, n_frames, n_eq_steps",
     [("vacuum", 24, 50, 1000), ("solvent", 5, 50, 1000), ("complex", 5, 50, 1000)],
 )
+@pytest.mark.parametrize("dt", [2.5, 4.0])
 @pytest.mark.parametrize("mol_a, mol_b", [("15", "30")])
 @pytest.mark.parametrize("seed", [2025])
 def test_run_rbfe_legs(
@@ -774,6 +780,7 @@ def test_run_rbfe_legs(
     n_windows,
     n_frames,
     n_eq_steps,
+    dt,
     mol_a,
     mol_b,
     seed,
@@ -784,35 +791,65 @@ def test_run_rbfe_legs(
     # which can be used to investigate the results that generated the hashes.
     # Hashes are of results.npz, lambda0_traj.npz and lambda1_traj.npz respectively.
     leg_results_hashes = {
-        (False, "vacuum"): (
-            "31d93d0a677a216e13038e58ab73bf3d5fc59efdbb9fb26f169f06ab98e45bb1",
-            "82c0be05e356fcab9bfba3e2299464a2d5e23810b94ef76d0c2c60b57b31e627",
-            "5c44ebfaa33c527eabc5f17cb5962c16e5195fbc11078589a4809a284ba165f5",
+        (2.5, False, "vacuum"): (
+            "420e8ed307551c547062fda7047b651b1d4ab7e6088e236c221177819aa94b07",
+            "86974113f3a6462253e6cb807c82fab9df52de828ce8acf42afc32e04098d151",
+            "a4a84795f1dd771f517524a23b0c81dbc68a03ad98464abac3585b24e66b3f21",
         ),
-        (False, "solvent"): (
-            "fa4e3e55cb964b964c10ef9ef590cba6e10efe12322f9a39617205f041f512a4",
-            "44501d605cd70fe55458d5affcc304f101d666ed4c63e009b5590ad7b5445b01",
-            "8549e7fc45134df1a1033405caf11e391dc7e6e871a050b4e572388b64f95dff",
+        (2.5, False, "solvent"): (
+            "c3dd7c07cb91bc0de32b85abeca464095d522165dad0aaa3dd1e65999ec6661e",
+            "6306404d0b6ef96f4aa6507d8b91b975238833293f53c41e685d365d291f9450",
+            "c050d8da98b3bc5eb8ee26ccdf04a4d141c7562462d486d7f4789fdd288c56a0",
         ),
-        (False, "complex"): (
-            "ee44de722439c05b76d401d819bdd8bf0cc6dd8a0c491f0fb9d96096254cd0cf",
-            "a9a9a1efd86381b28a779d6531ce64123a1abdb6ae5e89fc2177d5209424600a",
-            "7fe50e2a960215082095ec8177aca3fbb26e5a1e8b653952fe28c70323e920a0",
+        (2.5, False, "complex"): (
+            "8204eaa5b5574b74ecfdc4c59f331b2d5f9e42b751cb54b7a8d44eef2826f13a",
+            "f6c336ce097aa9f1f079c66b189573bf7abad6d967755b730b13e1bc47ecf9bc",
+            "699176932e43dec0aa8597f465bacb2a18e182c80822b22d7e7fc21a13c957af",
         ),
-        (True, "vacuum"): (
-            "698ca312ad3dbedee5e371114ba4ee867d8fad671dc966ab29c838420eaccf2b",
-            "7b115d93ca30a8ca896c53c1a0fafeda5851596bb2f6dc9d7607c9abce2a8c8f",
-            "b8f6a2530b93dc59be0853a6a731c536b4c0ae0bee7f33b66786a4b5883a3863",
+        (2.5, True, "vacuum"): (
+            "d4116c890bb8626c2573143a0626392124f9c42be2cb097b5a8835cf3df4b4e3",
+            "56dcd1ce701fe98c5dcf91e6da3fa473fa8ca0fe1b6f5babcead5b4333eb6f84",
+            "bafd3f38242c77413ddefbd0ea7c06547a97fe21fc76dedc9f20b9d7235d61df",
         ),
-        (True, "solvent"): (
-            "71a988169868a820396fc8139db9c57d9636005f76919c0e0a1ebd6f86806e60",
-            "cb68ae113af203de17af733d5e456797cb9e31ce23509cbda0a6cf20ba5c9b8b",
-            "41ac436aa03162a61af5b7aa05f6d906b33a4b73804c828b804917a3d9f65188",
+        (2.5, True, "solvent"): (
+            "76fcc9e988e6bde2787010b761ee564121264eba75cb9fc60981dd85099c5651",
+            "5191182a76d5309573be09b156bb7759fe76dd7ca60d714d2cc3456084f312b7",
+            "4e9983072e5e9c33cdc5835e90f26cbaa019d476392050db961c62a7da96f668",
         ),
-        (True, "complex"): (
-            "9107ccd68821008c88b353b3c5e20e1fce70ca06a6d24a74e20b46071481c541",
-            "d7c92bf227751d15bfd48c0786db6dccf44e3463c48ec97043a86016cba20326",
-            "7a7b7559890cc6c505edab9be5e928eaf809928fff52edf9818aeecd30141300",
+        (2.5, True, "complex"): (
+            "e02b59a2fc60845f0642ce6852f8da91ebac4dd45bd97cfb5d6c7e609644481c",
+            "f45bfb5114eb8d764afc662f91c675fd8f82a99a1183c30518ce241631df0b15",
+            "5ba358868a6c6d77edfd56de3e7d44b7fd919228b0b2cacccbc1fe3b9d3b6608",
+        ),
+        (4.0, True, "vacuum"): (
+            "0889d33d3d4ca79e93ce6b0643849188692d23f0d146f5aaf1c8af4f1fc322a2",
+            "83eb0493c0f4ddbabb1f8220b95fabfff5dccf998feee392686f20c1e040c13d",
+            "13edde8ffef89d101b0b10dfd0f25ff8dc8bad1c9dc8d2de35a110b36ef72266",
+        ),
+        (4.0, True, "solvent"): (
+            "c81182c4a76d24efdd460678b84044b013aa699a91dbdfe6549f6108d8edbc65",
+            "7f124d6ab002cc5b10d5e142e2a4f244bbcf6060ac4c43313685e769c93abeee",
+            "a2f902d34ce5bed4fb85f4f3169f074e2cb3f3b8012a4630abba1de80ebb4aac",
+        ),
+        (4.0, True, "complex"): (
+            "35ea4d231f8dd787f8532f3ed0a81140aaf49cac12e953eb0c4d02e65435374c",
+            "c874a440bef9ea215d40cf542fd2d230e3b8e13642336b08a9bf9baf64ec4ad8",
+            "9346fcff53fca8044561d4419fb7257be89e04f3836417481f715faf68ac12e3",
+        ),
+        (4.0, False, "vacuum"): (
+            "321fe66cb094455589efbd32339ef3d82412cc1cb7267c5ec6a4b036cbd135cf",
+            "3891ae86a10370163e8da367596ec37ebde4a724fab8248936f39b994447813c",
+            "f546101ba4e207f9079f89213595287dbe81913059e798add24e1cae845a2508",
+        ),
+        (4.0, False, "solvent"): (
+            "a8d79cb2e9755bb78e88451197907e6bb8b4b0098a83c5ca433afd0b16e37588",
+            "a43f36e7200ae9f451c51b0ec500292cc0a6fe3530338de2a2ae9f00c9b82798",
+            "6c34950200dd5883d9ba16ee72072ccb7a1bb6b4c6bcc3143c1168ae44ab5a00",
+        ),
+        (4.0, False, "complex"): (
+            "041316ee1d7c6ef0581a6e48549bffdc4ecd4cefb4169d84a464a0ff7755cac3",
+            "ad27a7fcecd4ae9f06e4d91916a5007615f75815e2d33f2810df3959835adb57",
+            "d366c80bcee0f11956866ba46c5d31893b73c81ac652369f76c73c041f79a254",
         ),
     }
     with resources.as_file(resources.files("tmd.testsystems.fep_benchmark.hif2a")) as hif2a_dir:
@@ -827,10 +864,11 @@ def test_run_rbfe_legs(
             n_frames=n_frames,
             n_windows=n_windows,
             forcefield=DEFAULT_FF,
-            output_dir=f"{ARTIFACT_DIR_NAME}/rbfe_{mol_a}_{mol_b}_{leg}_{seed}_{enable_batching}",
+            output_dir=f"{ARTIFACT_DIR_NAME}/rbfe_{mol_a}_{mol_b}_{leg}_{seed}_{enable_batching}_{dt}",
             force_overwrite=None,  # Force overwrite any existing data
             experimental_field="IC50[uM](SPA)",
             experimental_units="uM",
+            dt_fs=dt,
         )
 
         def verify_run(output_dir: Path):
@@ -915,7 +953,7 @@ def test_run_rbfe_legs(
         proc = run_example("run_rbfe_legs.py", get_cli_args(config_a), env=env)
         assert proc.returncode == 0
         verify_run(Path(config_a["output_dir"]))
-        verify_leg_results_hashes(Path(config_a["output_dir"]) / leg, leg_results_hashes[(enable_batching, leg)])
+        verify_leg_results_hashes(Path(config_a["output_dir"]) / leg, leg_results_hashes[(dt, enable_batching, leg)])
 
         config_b = config.copy()
         config_b["output_dir"] = config["output_dir"] + "_b"
@@ -969,6 +1007,78 @@ def test_run_rbfe_legs(
         verify_simulations_match(Path(config_a["output_dir"]), Path(config_b["output_dir"]))
 
 
+@pytest.mark.parametrize(
+    "leg, n_windows, n_frames, n_eq_steps",
+    [("solvent", 5, 10, 200), ("complex", 5, 10, 200)],
+)
+@pytest.mark.parametrize("mol_a, mol_b", [("15", "30")])
+@pytest.mark.parametrize("seed", [2025])
+def test_run_septop_legs_deterministic(
+    leg,
+    n_windows,
+    n_frames,
+    n_eq_steps,
+    mol_a,
+    mol_b,
+    seed,
+):
+    """Two runs of run_septop with the same seed must agree bitwise."""
+    with resources.as_file(resources.files("tmd.testsystems.fep_benchmark.hif2a")) as hif2a_dir:
+        config = dict(
+            mol_a=mol_a,
+            mol_b=mol_b,
+            sdf_path=hif2a_dir / "ligands.sdf",
+            pdb_path=hif2a_dir / "5tbm_prepared.pdb",
+            seed=seed,
+            legs=leg,
+            n_eq_steps=n_eq_steps,
+            n_frames=n_frames,
+            n_windows=n_windows,
+            forcefield=DEFAULT_FF,
+            force_overwrite=None,  # Force overwrite any existing data
+        )
+
+        output_dirs = []
+        for suffix in ["a", "b"]:
+            run_config = config.copy()
+            run_config["output_dir"] = f"{ARTIFACT_DIR_NAME}/septop_{mol_a}_{mol_b}_{leg}_{seed}_{suffix}"
+            proc = run_example("run_septop_legs.py", get_cli_args(run_config))
+            assert proc.returncode == 0
+            output_dirs.append(Path(run_config["output_dir"]))
+
+        ref_dir, comp_dir = output_dirs
+        assert ref_dir != comp_dir, "Runs are writing to the same output directory"
+
+        ref_results = np.load(str(ref_dir / leg / "results.npz"))
+        comp_results = np.load(str(comp_dir / leg / "results.npz"))
+        # The solvent leg carries no restraint correction, so pred_dg must equal raw_dg there.
+        if leg == "solvent":
+            np.testing.assert_equal(ref_results["correction"], 0.0)
+            np.testing.assert_equal(ref_results["pred_dg"], ref_results["raw_dg"])
+        for key in ["pred_dg", "pred_dg_err", "raw_dg", "correction", "correction_a", "correction_b", "n_windows"]:
+            np.testing.assert_equal(ref_results[key], comp_results[key], err_msg=f"{key} is not deterministic")
+        np.testing.assert_array_equal(ref_results["overlaps"], comp_results["overlaps"])
+
+        with open(ref_dir / leg / "final_pairbar_result.pkl", "rb") as ifs:
+            ref_final_pairbar = pickle.load(ifs)
+        with open(comp_dir / leg / "final_pairbar_result.pkl", "rb") as ifs:
+            comp_final_pairbar = pickle.load(ifs)
+        assert len(ref_final_pairbar.initial_states) == len(comp_final_pairbar.initial_states)
+
+        for ref_state, comp_state in zip(ref_final_pairbar.initial_states, comp_final_pairbar.initial_states):
+            np.testing.assert_array_equal(ref_state.x0, comp_state.x0)
+            np.testing.assert_array_equal(ref_state.v0, comp_state.v0)
+            np.testing.assert_array_equal(ref_state.box0, comp_state.box0)
+            np.testing.assert_array_equal(ref_state.ligand_idxs, comp_state.ligand_idxs)
+            assert_deep_eq(ref_state.potentials, comp_state.potentials)
+
+        for lamb in [0, 1]:
+            ref_traj = np.load(str(ref_dir / leg / f"lambda{lamb}_traj.npz"))
+            comp_traj = np.load(str(comp_dir / leg / f"lambda{lamb}_traj.npz"))
+            np.testing.assert_array_equal(ref_traj["coords"], comp_traj["coords"])
+            np.testing.assert_array_equal(ref_traj["boxes"], comp_traj["boxes"])
+
+
 @pytest.mark.fixed_output
 @pytest.mark.parametrize("enable_batching", [False, True])
 @pytest.mark.parametrize(
@@ -988,28 +1098,28 @@ def test_rest_ligand_flexibility(
 ):
     leg_hashes = {
         (False, "vacuum"): (
-            "76fafdfbfb5137b4a75bf6ffd9ebde2109ba19a72460278a751a583972c99c79",
-            "6b3e4d5d3bd4057bd5130a807c95dc82389d473cb1ae15fb4492643367a572ba",
+            "14951ebea2429b7c917fd7fdce1e2954eb7181d4c52483c3ab527720dfde73af",
+            "4e36e1e16f120cde7a6a18c0a2479c851bb53ba594ccaeef3c9a4e174845861f",
         ),
         (False, "solvent"): (
-            "5173503f827ba346195a5446de0f87601db23cf5a519a3cc874d412db46cad47",
-            "247bda684965ea468822995b7c8148689434b99a7305722f68e1c8a7bd43f51c",
+            "4dfec70ec5a5487c3547685b31e21547debede02fd6f75fb1d750724faeee0ab",
+            "b3dc0611afad5875cb70bea3ee876ef522bb93e5c461958606ab9ecf3d525e6d",
         ),
         (False, "complex"): (
-            "a3a26e1b85ada7823a6875909ac946077b8865a6f7e1970a01018c271bf1d964",
-            "4c131f3659ae0fd97479950c8974b2bc04b9b5ec689e7fa4328e2bf815152677",
+            "c8eb9fc9ecf751a0e1adb2aeebba37858b7fd622aac90dbf10936d195be4652f",
+            "c0d695f22af9b20b3b69fc6c5ed5489806da0ae6c59b4611922559287f407a1a",
         ),
         (True, "vacuum"): (
-            "380b2cb6cb212b9f56f1b4ef1272fad9286b46e09f7f74f59b7feff46718ad65",
-            "3bac9cdd295553f752f56a4e2aa73078e14db67d97f9480fa010e773b64ee354",
+            "29f333673d66dfbc0d4c280840a8d1a77b06041883e9c85f02aa98eccc1035a6",
+            "d3017192543aae2caaa8bede01f8055cc42b050cf2edbccf74010eca1c214b08",
         ),
         (True, "solvent"): (
-            "9353a83198f05d64b6bfa09ca32ffaea40b6dc2c242a3d0dc73697f063745a89",
-            "34bc3d19692a7ad14cb50f5d1ca07512f83298a1b379fe8a922e62014b4494a2",
+            "aafae98745e4c90b91ddfa264f1433287cba5588cbffcb12328a842dab8306df",
+            "f322e1bffdb5df936550cd98bb1a442e7dede8ebc082bcdbf2617d35b795f05d",
         ),
         (True, "complex"): (
-            "d8a2e40ee9b68dd771b39549908fc9e266894522900439b0d532bb594269162b",
-            "ab9e7e44d4c601c7a9504e7508ca7fa2f152200d88c00b4297855d89c4704f4b",
+            "a1d2e307dea63ef82cf4aced178fc7d138f410badf9d2f47d80f5af3509cb9eb",
+            "8ed1f332c6ff52359de024ae69d705956667be23dbfd664e421f7a49f4e15c40",
         ),
     }
 
@@ -1090,44 +1200,44 @@ def test_run_rbfe_legs_local(
     # Hashes are of results.npz, lambda0_traj.npz and lambda1_traj.npz respectively.
     leg_results_hashes = {
         ("solvent", 400, True): (
-            "47357c076432dfacdb97b78608a39bf46939cb81ff1a0311213dcd30719d73e8",
-            "dbab0fb1c9e26a10ee2d2b0f68954e9aa55a3dbfe172b0f9a250bd72414e10b1",
-            "f7442835dc46f85a7c0026b648eb3c6c20e0d792fac204cd47900234ad703c59",
+            "efec752fdaaaa826ce5833a98a5c68b7fc1354475410c133185681c5ac8d9c86",
+            "54eb9ca8b9724ba5b7a108d1bdd2fa5a75c0500d9be2a27e06d83f517fad5cc3",
+            "ff78fa5e56a4559cca308d89e051deb93a272fb15c45d58e250f499fd6b7a10f",
         ),
         ("complex", 400, True): (
-            "1b44626f2818687ccf65b6b1508ce4b88f4f22440548408c902e54dd64ecb233",
-            "560af8e472e3bf115ff175fb871eb8c3a87715c4b2c50d327fd58d8810bf5c07",
-            "d0884dc45ed5c59bd5e0ce4fd0009a8e29a83341d3ba0e04357a63fc2588aa84",
+            "2eff6f9ddbda4bf535b8456ac4fe1b2cf6b6637a395e2051439e62ade6122706",
+            "bfc7cbccb03a9facf724f94b45297793048da7cdd1ec398a4f78fff98e7197a1",
+            "6ace0777cb229231a7331ac323afb98e2981981b058df7295cb91f47b3ef6a11",
         ),
         ("solvent", 390, True): (
-            "10723dc3f61119f2e04870a82fce7421af0575d8d92beebdeccf722ee34a3108",
-            "5306286a9a7e614b2fa7a8ad52d299fb6581f2d6b6ea0b82296a4d9d2b6c2e2a",
-            "3d2421be03b44b7e88b55cd3648b4c4151054b275fa6054ecef5824407dd814f",
+            "aead6507041e2c54e959a48e6ed022818aa15dc4508ed35cc6b52f4ecb4f37c0",
+            "65b88d90199b2831a18e71c81b07fd073d0866d6a501df4674911238163747ac",
+            "472f4493924bd2372762ea6cb7f25ee96d00e09c42ab0fab2b58149014be16bc",
         ),
         ("complex", 390, True): (
-            "1114efd0a22fd367c2a7008d3c923743ae819174644dac650e15188cff1ed235",
-            "000056a5447d38c2ee0edad3d5811447842f0973e96ac04ac126a3fbb80216e1",
-            "83f745f91add302bc87228c0a77a25393282ecbbbfe949bcbef6f25e1359fe28",
+            "1b77a0cf0bf62b8459a3be655dc24f11506747b34efb407475bfeadba1a1032f",
+            "f2d0de8358192b875268e0bf97d3a6b2ea30a0b2ccb0d1e8657ffbc794dd3cc7",
+            "682adc5eb0677c144a92a942f3c33e1c1b55ad7b0f0383ea17e6009b42d57c27",
         ),
         ("solvent", 400, False): (
-            "a8be0fcdf639958d8c06d44d71188af7e9e9be768af94897394388b57fa06d8e",
-            "c959b8512c5696438b541c314769cd96f11e3e15d0ef7f25c85b9f24b4c15820",
-            "c34e86c53db5f93d9fdd9013e6ef822af861411467b87366a0d640094dc30584",
+            "2d79d23a0a805179144cfd70b8eb66ad711a6de3928113b2d30c0dd911581755",
+            "1a0654ff67e3a35fa619182b568cf5a7619c35ef611e91cc9422b38a64201a8a",
+            "d222308a6f1d9d532358b5756137b34e04cf0bb00864777026b9589961a8882e",
         ),
         ("complex", 400, False): (
-            "34d3d3098560215d41f365990b69d557356181279efdff9007793c709a1fd1c7",
-            "e28019576043e10e705ceab4cbda70af5de600699d94af553448d592bedb84ee",
-            "ec4f0aaa911f0eb228e667e354fbc55bedeeee42b616233ed012706468aa1ed1",
+            "dbf0cc35606944b85dd534a2059f8a60a0524c342a697bd7b8a273bb47246f61",
+            "8727c99c5c0496be7a75e7794b36761aa0771cfa75eb8195cdb3d5cc07425a68",
+            "bc2faaf1834e4e4f2b00a4ea59b35c97d3670ca0b2990b2b5d1576495ba740a3",
         ),
         ("solvent", 390, False): (
-            "feea23c4055697e6de0a019e7802696ed1a05f5b41bd99795af59ab48a52c23c",
-            "b58c7a45e521907a98ea55d5f38067366d014ca24700f11372c5379e39b96fe2",
-            "663378eb633d16c708e8f5ed32f98f99da970f2475d58b63d49c13517f1cb4fa",
+            "fd1494c365e75952564985dc30a67228c3a747b1a89ec36f3db22ed7cd3fcd31",
+            "b65df989551bf2d4318fce22ae0de3769a09f552bc48f475cb70bf39b1849544",
+            "83dfe46d7377930578a141111f615d3f68cf815df70f523f2b32a6598b8c7ad3",
         ),
         ("complex", 390, False): (
-            "6cbcb86adc4e0f372c75aad982a1548c550a8be5f8f715d40fa846bd2d4ea855",
-            "573899b63ab645151093843cf0dee7ced0f4487f79d4fcc5923467baba6aac38",
-            "3ec9d4a67d3e4aa769f954f8865f414434ffa535fa500e611d09e9a89e8cf7ee",
+            "4c17e667c691498316fca56955d22d000121b4493bbc8f1a368d39e54b2edf3a",
+            "0cc30c8d6e0bfd9d3dcfa529cce9e159f817c99f2b6743efecf9edc7b3ecffb4",
+            "c94ba66c8cce658db88eaa6c10f33155f6a50df12590ac0b3f4c515d1590bb48",
         ),
     }
     with resources.as_file(resources.files("tmd.testsystems.fep_benchmark.hif2a")) as hif2a_dir:

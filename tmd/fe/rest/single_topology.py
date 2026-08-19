@@ -1,4 +1,5 @@
 # Copyright 2019-2025, Relay Therapeutics
+# Modifications Copyright 2026, Forrest York
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -83,6 +84,7 @@ class SingleTopologyREST(SingleTopology):
         forcefield: Forcefield,
         max_temperature_scale: float,
         temperature_scale_interpolation: InterpolationFxnName = "exponential",
+        maximum_ring_size: int | None = 7,
     ):
         """
         Parameters
@@ -104,23 +106,41 @@ class SingleTopologyREST(SingleTopology):
 
         temperature_scale_interpolation: str
             Interpolation function to use for temperature scaling. One of "linear", "quadratic", or "exponential"
+
+        maximum_ring_size: integer | None
+            Maximum size of ring that will be considered for expansion. If none, all rings will be accepted
         """
         super().__init__(mol_a, mol_b, core, forcefield)
         self._temperature_scale_interpolation_fxn: InterpolationFxn = get_temperature_scale_interpolation_fxn(
             max_temperature_scale, temperature_scale_interpolation
         )
+        self._maximum_ring_size = maximum_ring_size
         self._nxg_a = convert_to_nx(mol_a)
         self._nxg_b = convert_to_nx(mol_b)
-        self._cycles_a = nx.cycle_basis(self._nxg_a)
-        self._cycles_b = nx.cycle_basis(self._nxg_b)
+        self._cycles_a = [
+            cycle
+            for cycle in nx.cycle_basis(self._nxg_a)
+            if self._maximum_ring_size is None or len(cycle) < self._maximum_ring_size
+        ]
+        self._cycles_b = [
+            cycle
+            for cycle in nx.cycle_basis(self._nxg_b)
+            if self._maximum_ring_size is None or len(cycle) < self._maximum_ring_size
+        ]
 
-    # expand REST region to include complete ring groups
     @staticmethod
-    def expand_rest_region_in_mol(atom_idxs, cycles, mol):
+    def expand_rest_region_in_mol(atom_idxs, cycles, mol, dummy_atoms):
+        """expand REST region to include complete ring groups when there is a dummy atom in the ring
+        or if the dummy atom is connected to the ring.
+
+        Will also expand to include all terminal atoms in the ring as well as nitriles and hydroxyls
+        """
         region = set()
-        for atom_idx in atom_idxs:
+        for atom_idx in dummy_atoms:
+            atom = mol.GetAtomWithIdx(atom_idx)
+            nb_idxs = [nb.GetIdx() for nb in atom.GetNeighbors()] + [atom_idx]
             for cycle in cycles:
-                if atom_idx in cycle:
+                if any([idx in cycle for idx in nb_idxs]):
                     for cycle_atom in cycle:
                         region.add(cycle_atom)
 
@@ -359,8 +379,12 @@ class SingleTopologyREST(SingleTopology):
         mol_a_idxs, mol_b_idxs = self.split_combined_idxs(self.base_rest_region_atom_idxs)
 
         # First apply ring/terminal expansion
-        expanded_set_a = self.expand_rest_region_in_mol(mol_a_idxs, self._cycles_a, self.mol_a)
-        expanded_set_b = self.expand_rest_region_in_mol(mol_b_idxs, self._cycles_b, self.mol_b)
+        expanded_set_a = self.expand_rest_region_in_mol(
+            mol_a_idxs, self._cycles_a, self.mol_a, [self.c_to_a[idx] for idx in self.get_dummy_atoms_a()]
+        )
+        expanded_set_b = self.expand_rest_region_in_mol(
+            mol_b_idxs, self._cycles_b, self.mol_b, [self.c_to_b[idx] for idx in self.get_dummy_atoms_b()]
+        )
 
         # Then expand branch atoms to nearest ring (+ one bond beyond for torsion coverage)
         ring_expanded_a = self.expand_rest_region_to_nearest_ring(

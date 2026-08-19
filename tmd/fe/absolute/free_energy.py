@@ -74,11 +74,11 @@ class RestraintParams:
     Attributes
     ----------
     kb : float
-        Bond restraint force constant (kcal/mol/nm^2), default 500
+        Bond restraint force constant (kJ/mol/nm^2), default 500
     ka : float
-        Angle restraint force constant (kcal/mol/rad^2), default 200
+        Angle restraint force constant (kJ/mol/rad^2), default 200
     kd : float
-        Dihedral restraint force constant (kcal/mol), default 10
+        Dihedral restraint force constant (kJ/mol), default 10
     on : float
         Lambda value at which restraints reach full strength, default 0.0625
     """
@@ -374,9 +374,10 @@ class AbsoluteBindingFreeEnergy(AbsoluteFreeEnergy):
 
         References
         ----------
-        [1] [Mobley, Chodera, 2009] On the use of harmonic restraints in
-            binding free energy calculations.
-            J. Phys. Chem. B 113, 5, 2009.
+
+        [1] Boresch, Stefan, et al. "Absolute binding free energies: a quantitative
+            approach for their calculation." The Journal of Physical Chemistry B 107.35
+            (2003): 9535-9551.
             https://pubs.acs.org/doi/10.1021/jp0217839
         """
         _, r0 = self.get_bond_geometry()

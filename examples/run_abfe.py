@@ -66,7 +66,7 @@ from tmd.fe.rbfe import (
     setup_optimized_host,
 )
 from tmd.fe.topology import BaseTopology
-from tmd.fe.utils import get_mol_experimental_value, get_mol_name, read_sdf_mols_by_name, set_romol_conf
+from tmd.fe.utils import get_mol_experimental_value, get_mol_name, read_sdf_mols_by_name, set_romol_conf, verify_mol
 from tmd.ff import Forcefield
 from tmd.md.builders import build_membrane_system, build_protein_system, build_water_system
 from tmd.md.exchange.utils import get_radius_of_mol_pair
@@ -410,6 +410,12 @@ def main():
     parser.add_argument("--n_frames", default=2000, type=int, help="Number of frames to generation")
     parser.add_argument("--steps_per_frame", default=400, type=int, help="Steps per frame")
     parser.add_argument(
+        "--hrex_iterations_per_frame",
+        default=1,
+        type=int,
+        help="Number of HREX iterations to run before collecting a frame. This will run steps_per_frame per each iteration, so it is suggested to reduce n_frames if increasing this value",
+    )
+    parser.add_argument(
         "--n_windows", default=DEFAULT_NUM_WINDOWS, type=int, help="Max number of windows from bisection"
     )
     parser.add_argument("--min_overlap", default=0.667, type=float, help="Overlap to target in bisection")
@@ -431,15 +437,23 @@ def main():
         "--output_dir", default=None, help="Directory to output results, else generates a directory based on the time"
     )
     parser.add_argument("--legs", default=[COMPLEX_LEG, SOLVENT_LEG], nargs="+")
+    parser.add_argument(
+        "--bisection_frames", type=int, default=100, help="Number of frames to collect during bisection"
+    )
     parser.add_argument("--local_md_k", default=10_000.0, type=float, help="Local MD k parameter")
     parser.add_argument("--local_md_radius", default=1.2, type=float, help="Local MD radius")
     parser.add_argument("--local_md_free_reference", action="store_true")
-    parser.add_argument("--bisection_frames", type=int, default=100)
     parser.add_argument(
         "--local_md_steps",
         default=0,
         type=int,
         help="Number of steps to run with Local MD. Must be less than or equal to --steps_per_frame. If set to 0, no local MD is run",
+    )
+    parser.add_argument(
+        "--local_md_iterations",
+        default=1,
+        type=int,
+        help="Number of independent local MD iterations to make. local_md_steps // local_md_iterations steps per iteration",
     )
     parser.add_argument(
         "--store_trajectories",
@@ -465,9 +479,16 @@ def main():
         action="store_true",
         help="Add a POPC membrane to the protein. Refer to OpenMM for preparing proteins for adding Membranes",
     )
+    parser.add_argument("--dt_fs", default=2.5, type=float, help="Timestep in femptoseconds")
     args = parser.parse_args()
     mols_by_name = read_sdf_mols_by_name(args.sdf_path)
     np.random.seed(args.seed)
+
+    for mol in mols_by_name.values():
+        verify_mol(mol)
+
+    assert args.dt_fs > 0.0
+    dt = args.dt_fs * 1e-3
 
     output_dir = args.output_dir
     if output_dir is None:
@@ -511,9 +532,11 @@ def main():
             n_frames=args.n_frames,
             steps_per_frame=args.steps_per_frame,
             seed=args.seed,
+            dt=dt,
             hrex_params=HREXParams(
                 optimize_target_overlap=args.target_overlap,
                 n_frames_bisection=args.bisection_frames,
+                iterations_per_frame=args.hrex_iterations_per_frame,
             ),
             local_md_params=LocalMDParams(
                 args.local_md_steps,
@@ -521,6 +544,7 @@ def main():
                 min_radius=args.local_md_radius,
                 max_radius=args.local_md_radius,
                 freeze_reference=not args.local_md_free_reference,
+                iterations=args.local_md_iterations,
             )
             if args.local_md_steps > 0
             else None,

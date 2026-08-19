@@ -19,11 +19,12 @@ from functools import cache
 
 import jax
 import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import pytest
 from common import ligand_from_smiles
 from numpy.typing import NDArray
-from rdkit.Chem import rdMolDescriptors
+from rdkit.Chem import AllChem, rdMolDescriptors
 
 from tmd.constants import DEFAULT_ATOM_MAPPING_KWARGS
 from tmd.fe import atom_mapping
@@ -40,8 +41,9 @@ from tmd.fe.rest.interpolation import (
 from tmd.fe.rest.single_topology import REST_REGION_ATOM_FLAG, SingleTopologyREST
 from tmd.fe.single_topology import SingleTopology
 from tmd.fe.system import GuestSystem
-from tmd.fe.utils import get_romol_conf, read_sdf_mols_by_name
+from tmd.fe.utils import get_romol_conf, read_sdf, read_sdf_mols_by_name
 from tmd.ff import Forcefield
+from tmd.graph_utils import convert_to_nx
 from tmd.md import builders
 from tmd.potentials import NonbondedInteractionGroup
 from tmd.utils import path_to_internal_file
@@ -72,13 +74,55 @@ def get_single_topology(mol_a, mol_b, core) -> SingleTopology:
 
 @cache
 def get_single_topology_rest(
-    mol_a, mol_b, core, max_temperature_scale: float, temperature_scale_interpolation_fxn: InterpolationFxnName
+    mol_a,
+    mol_b,
+    core,
+    max_temperature_scale: float,
+    temperature_scale_interpolation_fxn: InterpolationFxnName,
+    **kwargs,
 ) -> SingleTopologyREST:
     return SingleTopologyREST(
-        mol_a, mol_b, np.asarray(core), forcefield, max_temperature_scale, temperature_scale_interpolation_fxn
+        mol_a, mol_b, np.asarray(core), forcefield, max_temperature_scale, temperature_scale_interpolation_fxn, **kwargs
     )
 
 
+@pytest.mark.nogpu
+def test_single_topology_rest_macrocycle():
+    mols = read_sdf("tests/data/3RKZ_macrocycles.sdf")
+    assert len(mols) >= 2
+
+    mol_a = mols[0]
+    mol_b = mols[1]
+
+    max_ring_size = 7
+    core = get_core(mol_a, mol_b)
+    st_rest = get_single_topology_rest(mol_a, mol_b, core, 2.0, "exponential", maximum_ring_size=max_ring_size)
+
+    assert all(len(cycle) < max_ring_size for cycle in st_rest._cycles_a)
+    assert all(len(cycle) < max_ring_size for cycle in st_rest._cycles_b)
+
+    alchemical_mol = st_rest.mol(0.0)
+    alchemical_nx = convert_to_nx(alchemical_mol)
+
+    # Verify that there is a macrocyclic ring larger than max_ring_size
+    largest_ring = max(nx.cycle_basis(alchemical_nx), key=lambda x: len(x))
+    assert len(largest_ring) > max_ring_size
+
+    rest_region_atoms = st_rest.rest_region_atom_idxs
+    # There may be parts of the ring included, but shouldn't be all of it
+    assert len(set(largest_ring).intersection(rest_region_atoms)) < len(largest_ring)
+
+    st_rest_include_largest_ring = get_single_topology_rest(
+        mol_a, mol_b, core, 2.0, "exponential", maximum_ring_size=None
+    )
+
+    assert len(st_rest_include_largest_ring.rest_region_atom_idxs) > len(st_rest.rest_region_atom_idxs)
+
+    # If we allow it, all atoms will be selected
+    assert len(set(largest_ring).intersection(st_rest_include_largest_ring.rest_region_atom_idxs)) == len(largest_ring)
+
+
+@pytest.mark.nogpu
 @pytest.mark.parametrize("lamb", [0.0, 0.4, 0.5, 1.0])
 @pytest.mark.parametrize("temperature_scale_interpolation_fxn", ["linear", "quadratic", "exponential"])
 @pytest.mark.parametrize("mol_pair", np.random.default_rng(2024).choice(hif2a_ligand_pairs, size=3))
@@ -252,6 +296,7 @@ def get_identity_transformation(mol):
     return SingleTopologyREST(mol, mol, core, forcefield, 2.0, "linear")
 
 
+@pytest.mark.nogpu
 def test_single_topology_rest_propers():
     """Example with some propers not in the REST region"""
     mol_a = hif2a_ligands["15"]
@@ -261,6 +306,7 @@ def test_single_topology_rest_propers():
     assert set(st.target_propers.items()) < set(st.candidate_propers.items())
 
 
+@pytest.mark.nogpu
 def test_single_topology_rest_propers_identity():
     # benzene: no propers are scaled
     benzene = ligand_from_smiles("c1ccccc1")
@@ -278,6 +324,35 @@ def test_single_topology_rest_propers_identity():
     assert len(set(st.candidate_propers.values())) == 9 * 6 + 6
 
 
+@pytest.mark.nogpu
+def test_indane_to_indole_rest_region():
+    """Verify that fused rings aren't expanded to"""
+
+    indole = ligand_from_smiles("C12=C(C=CN2)C=CC=C1")
+    indane = ligand_from_smiles("c1ccc2c(c1)CCC2")
+
+    atom_map = ((0, 3), (1, 4), (2, 6), (3, 7), (4, 8), (5, 5), (6, 0), (7, 1), (8, 2))
+    AllChem.AlignMol(indole, indane, atomMap=atom_map)
+
+    core = get_core(indole, indane)
+    st = get_single_topology_rest(indole, indane, core, 2.0, "exponential")
+
+    # Previously the entire system would be included
+    assert len(st.rest_region_atom_idxs) != st.get_num_atoms()
+
+    alchemical_mol = st.mol(0.0)
+    alchem_mol = convert_to_nx(alchemical_mol)
+
+    cycles = nx.cycle_basis(alchem_mol)
+    assert len(cycles) == 2
+    five_member_ring_atoms = next(cycle for cycle in cycles if len(cycle) == 5)
+    six_member_ring_atoms = next(cycle for cycle in cycles if len(cycle) == 6)
+    assert st.rest_region_atom_idxs.issuperset(five_member_ring_atoms)
+    # Two atoms are shared between both rings, so the six member will have two atoms in the rest region.
+    assert len(st.rest_region_atom_idxs.intersection(six_member_ring_atoms)) == 2
+
+
+@pytest.mark.nogpu
 @pytest.mark.parametrize("seed", [2026])
 def test_single_topology_custom_rest_atoms(seed):
     """Test the ability to manually specify which atoms should be included in the REST region by setting
@@ -329,6 +404,7 @@ def test_single_topology_custom_rest_atoms(seed):
     assert len(st.rest_region_atom_idxs) == st.get_num_atoms()
 
 
+@pytest.mark.nogpu
 @pytest.mark.parametrize(
     "lamb", [0.0, 0.4, 0.51, 1.0]
 )  # NOTE: asymmetry at lambda = 0.5 due to discontinuity in combine_confs
