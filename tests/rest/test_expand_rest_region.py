@@ -24,7 +24,7 @@ def expand_from_base(smiles: str, base_idxs: set[int]) -> set[int]:
     mol = get_mol(smiles)
     nxg = convert_to_nx(mol)
     cycles = nx.cycle_basis(nxg)
-    step1 = SingleTopologyREST.expand_rest_region_in_mol(base_idxs, cycles, mol)
+    step1 = SingleTopologyREST.expand_rest_region_in_mol(base_idxs, cycles, mol, base_idxs)
     return SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base_idxs, mol, nxg, cycles)
 
 
@@ -484,7 +484,7 @@ class TestExpandRestRegionInMol:
         for cycle in cycles:
             ring_atoms.update(cycle)
 
-        result = SingleTopologyREST.expand_rest_region_in_mol(ring_atoms, cycles, mol)
+        result = SingleTopologyREST.expand_rest_region_in_mol(ring_atoms, cycles, mol, ring_atoms)
 
         for ring_atom in ring_atoms:
             for neighbor_atom in mol.GetAtomWithIdx(ring_atom).GetNeighbors():
@@ -502,7 +502,7 @@ class TestExpandRestRegionInMol:
             ring_atoms.update(cycle)
 
         single_atom = next(iter(ring_atoms))
-        result = SingleTopologyREST.expand_rest_region_in_mol({single_atom}, cycles, mol)
+        result = SingleTopologyREST.expand_rest_region_in_mol({single_atom}, cycles, mol, {single_atom})
         assert ring_atoms.issubset(result)
 
 
@@ -520,7 +520,7 @@ class TestPipelineIntegration:
         methyl_c = get_atom_idx_by_map_num(mol, 1)
         base = {methyl_c}
 
-        step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol)
+        step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol, base)
         step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, mol, nxg, cycles)
 
         ring_atoms = set()
@@ -548,7 +548,7 @@ class TestPipelineIntegration:
             start_atom = next(iter(isolated_atoms))
             base = {start_atom}
 
-            step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol)
+            step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol, base)
             assert ring_0.issubset(step1)
 
             step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, mol, nxg, cycles)
@@ -572,7 +572,9 @@ class TestPipelineIntegration:
         ch2_2 = get_atom_idx_by_map_num(mol, 2)
         base = {ch2_1, ch2_2}
 
-        step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol)
+        # No dummy atoms here: these are plain base REST atoms, so neither ring is
+        # pulled in by the dummy-adjacency rule in expand_rest_region_in_mol.
+        step1 = SingleTopologyREST.expand_rest_region_in_mol(base, cycles, mol, set())
         step2 = SingleTopologyREST.expand_rest_region_to_nearest_ring(step1, base, mol, nxg, cycles)
 
         # Neither ring should be fully included
